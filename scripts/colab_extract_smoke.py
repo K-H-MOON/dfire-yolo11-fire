@@ -1,182 +1,264 @@
-# ===== 발연 구간 프레임 추출 =====
-# 드라이브 smoke_frames 폴더의 영상에서, 사람이 직접 확인한 시간대만 뽑음.
+# ===== 발연 프레임 추출 =====
 #
-# 왜 이 방식인가 — 영상 전체에 프레임을 고르게 흩뿌리면 10분 영상에서 15초에 한 장이 됨.
-# 발화 직전 흰 연기는 짧게는 2초짜리라 그 구간이 통째로 빠짐. 영상을 재생할 수 있는
-# 사람이 구간을 짚고 그 구간만 촘촘히 뽑는 쪽이 정확함.
+# `docs/TIMELINE.md` 에 확정한 구간만 초당 2장으로 뽑음.
+# **이 스크립트의 시간대는 그 문서에서 옮긴 것임. 고칠 일이 있으면 문서를 먼저 고칠 것.**
 #
-# 프레임은 드라이브에 저장하고, 확인용 시트만 내려받음.
-# Colab 새 노트북에 이 셀 하나. GPU 불필요.
+# 2026-08-11 에 통째로 다시 씀. 이전 판은 초기 12편 심사 때 정한 시간대를 담고
+# 있었고, 열다섯 개를 원본 해상도로 다시 보니 대부분 틀렸음.
+#   - 04 는 25~31초를 가리키고 있었으나 그 구간은 흰 자막에서 부엌으로 넘어가는
+#     디졸브였고, 진짜 발연은 80~89초(검은 배경)였음
+#   - 07 은 `발연 44~79초 연속` 으로 적혀 있었으나 실제로는 여섯 토막이고
+#     사이사이가 야외 원거리 컷임
+#   - 12 는 `발연 85~156초 연속` 으로 적혀 있었으나 셰프 설명 컷이 계속 끼어듦
+#
+# ---------------------------------------------------------------------------
+# 이 스크립트가 하는 일
+#
+#   1. 확정 구간만 초당 2장으로 뽑음
+#   2. 전환 프레임·소화약제·그래픽 구간을 뺌
+#   3. ft 는 상단 15% 를 잘라냄 (자막이 연기와 겹침)
+#   4. 출처마다 **최대다양 순서**를 매겨 manifest 에 넣음
+#
+# 4번이 중요함. **순서만 매겨 두면 상한을 나중에 바꿔도 다시 안 뽑아도 됨.**
+# 상한 32 는 `rank < 32` 로 거르면 되고, 늘리고 싶으면 숫자만 바꾸면 됨.
+#
+# ---------------------------------------------------------------------------
+# 상한과 태그 규칙 (docs/PREREGISTER_S1.md 에 사전 등록할 것)
+#
+#   학습에 쓰는 것        `smoke` 태그만
+#   평가에만 쓰는 것       smoke_faint · smoke_reheat (태그를 유지해 따로 집계)
+#   아예 안 쓰는 것        smoke_frag · smoke_mixed
+#   상한                 학습으로 배정된 출처만 **최대 32장** (전체 15개의 중앙값)
+#                        평가 출처는 상한 없음. 하한 10장만 확인
+#   고르는 방식           최대다양 — 이미 고른 것들에서 가장 먼 프레임을 차례로
+#                        0번 프레임에서 시작
+#
+# Colab 새 노트북에 이 셀 하나. GPU 불필요. 10~20분.
 
-import os, glob, json, shutil, subprocess
-from PIL import Image, ImageDraw, ImageFont
-from google.colab import drive, files
+import os, glob, json, shutil, subprocess, unicodedata
+import numpy as np
+from PIL import Image
+from google.colab import drive
 
 SRC = '/content/drive/MyDrive/smoke_frames'
-OUT = f'{SRC}/extracted'          # 프레임 저장 위치 (드라이브)
-
-# 태그별 초당 장수
-#   발연        학습 대상. 촘촘히
-#   발연_재가열  한 번 불이 붙었다 꺼진 뒤의 기름 연기. 그을음이 섞였을 수 있어 분리
-#   발연_조각    2초 이하. 학습에만 쓰고 평가에는 넣지 않음. 자료원 수에도 안 셈
-#   발화        학습 클래스 아님. 대조·예시용이므로 낮게
-FPS = {'발연': 2.0, '발연_재가열': 2.0, '발연_조각': 2.0, '발화': 0.5}
+OUT = '/content/drive/MyDrive/smoke_frames/extracted'
+FPS = 2
 
 # ---------------------------------------------------------------------------
-# 시간대 — 2026-08-09 사람이 영상을 재생하며 직접 확인한 값
+# 확정 구간 — docs/TIMELINE.md 에서 옮김
 #
-# 제외한 영상과 사유
-#   02 Cooking fire demo with NH State Fire Marshal    연기 출처 불명.
-#      0:31-0:48 연기 앞에 0:10-0:17 발화가 있고, 그 사이 0:17-0:31 이 인터뷰로
-#      대체되어 소화 여부를 확인할 수 없음. 발화 전 기름 연기인지 잔여 연기인지 불명
-#   03 Cooking Fire Safety                             발연 2초. 게다가 0:00 시작이라
-#      연기가 생겨나는 과정이 화면에 없음
-#   10 Kitchen Grease Fire Safety                      발연 1초
-#   11 Putting out kitchen grease fires                의미 있는 발연 구간 없음
+#   match   드라이브 파일명에 들어 있는 고유 문자열
+#   crop    화면을 잘라낼 때만 씀. (위, 아래) 비율
+#   skip    구간 안에서 빼야 하는 초 (전환 프레임 등)
+#   tags    태그별 (시작초, 끝초) 목록. 초는 **재생 초**임
 # ---------------------------------------------------------------------------
 TIMELINE = {
-    # key            영상 파일명에 들어 있는 고유 문자열
-    'turkey': dict(match='deep frying a turkey', ranges=[
-        ('발연', '0:32', '0:35'), ('발연', '0:40', '0:42'),
-        ('발연', '0:54', '0:57'), ('발연', '1:41', '1:45'),
-        ('발화', '0:42', '0:46'), ('발화', '0:58', '1:01'),
-    ]),
-    # 빠른 배속. 재생 6초가 실제로는 더 길 수 있음 — 프레임 보고 확인할 것
-    'prevention': dict(match='Fire Prevention - Cooking', ranges=[
-        ('발연', '0:25', '0:31'),
-        ('발화', '0:32', '0:33'),
-    ]),
-    # 슬로우모션. 재생 7초가 실제로는 2초 안팎 — 장수는 나오나 실제 시간은 짧음
-    'letschat': dict(match='Cooking Fire Prevention and Response', ranges=[
-        ('발연', '2:33', '2:40'),
-        ('발화', '2:41', '2:45'),
-    ]),
-    # 발연이 발화로 끊김 없이 이어짐 (0:16, 1:26)
-    'spread': dict(match='how quickly grease fires', ranges=[
-        ('발연', '0:13', '0:16'), ('발연', '1:20', '1:26'),
-        ('발화', '0:16', '0:21'), ('발화', '0:36', '0:45'), ('발화', '1:26', '1:28'),
-    ]),
-    # 0:44-1:19 이 35초 연속. 중간에 화각이 바뀌므로 나중에 같은 화각끼리 묶을 것.
-    # 1:44-1:52 는 뚜껑을 덮어 진화 — 물이 닿지 않았으므로 이후 연기는 김이 아님
-    'greasekitchen': dict(match='Grease Fires in the Kitchen', ranges=[
-        ('발연', '0:38', '0:40'), ('발연', '0:44', '1:19'),
-        ('발연_재가열', '1:52', '1:54'), ('발연_재가열', '2:02', '2:03'),
-        ('발화', '1:20', '1:30'), ('발화', '1:42', '1:44'), ('발화', '2:03', '2:15'),
-    ]),
-    # 화면에 자막이 섞임. 띠 안에 있으면 잘라내고, 연기를 덮으면 해당 프레임 제외
-    # 발화는 사람 판단으로 부적합하여 뽑지 않음
-    'avoid': dict(match='How to avoid kitchen grease fires', ranges=[
-        ('발연', '0:22', '0:26'), ('발연', '1:16', '1:24'),
-    ]),
-    # 2초뿐. 자료원으로 세지 않음. 발연→발화 연결은 확인됨(1:07)
-    'fire411': dict(match='Kitchen Fire 411', ranges=[
-        ('발연_조각', '1:05', '1:07'),
-    ]),
-    # 1:25-2:36 이 71초 연속. 현재 가장 긴 구간
-    'deepfry': dict(match='Deep-Frying', ranges=[
-        ('발연', '1:25', '2:36'),
-        ('발화', '2:38', '2:50'),
-    ]),
+    # 배속·컷 없음. 유일하게 시간 축 검증이 가능한 자료. 앞이 잘려 0초에 이미 연기
+    's2': dict(match='発生するまで', tags={
+        'smoke': [(0, 170)]}),
+
+    # ×4·×6배속. 자막이 연기와 겹쳐 226~268초를 뺌. 상단 15% 를 잘라 상단 자막 제거
+    # 269~273 은 연기가 상단 자막을 덮으므로 자르지 않으면 소재가 오염됨
+    'ft': dict(match='ファイテック', crop=(0.15, 0.0), tags={
+        'smoke': [(218, 225), (269, 273)]}),
+
+    # 컷 5군데. 재생 44초가 실제 8분 25초에서 발췌한 것. 유온계·경과시간이 화면에
+    'j01': dict(match='天ぷら油の過熱発火', tags={
+        'smoke':       [(38, 57)],
+        'smoke_faint': [(14, 37)]}),
+
+    # 컷 1군데(58초는 화면이 깨진 전환 프레임). 640×480 인데 대비가 좋아 씀
+    'm3': dict(match='異物挟み込み', skip=[58], tags={
+        'smoke':       [(59, 92)],
+        'smoke_faint': [(41, 57)]}),
+
+    # 41초에 시간을 건너뜀. 40.2~40.9 는 와이프 전환이라 41 부터 잡음
+    # 2회차(96~127초)는 자동소화가 작동해 발연이 한 프레임도 없음
+    'p2': dict(match='汚れた鍋', tags={
+        'smoke': [(41, 51)]}),
+
+    # 실험 3회(500mL·100mL·IH). 방송 자막이 상시 있으나 연기와 안 겹침
+    'kt': dict(match='カンテレNEWS', tags={
+        'smoke':        [(354, 362), (371, 372), (377, 381)],
+        'smoke_reheat': [(416, 420)]}),
+
+    # 23초는 인터뷰에서 넘어오는 디졸브. 40~48초는 유리 뚜껑 아래에서 타는 중이라
+    # 연기와 불꽃이 섞임 — 학습·평가 모두 제외
+    # **드라이브에 없음. 올려야 함**
+    'kfire03': dict(match='Fire Prevention Week', tags={
+        'smoke':       [(24, 36)],
+        'smoke_mixed': [(40, 48)]}),
+
+    # 0~2.5초 인트로는 본편 47~49초와 같은 장면(화소로 확인). 34~36초는 경고 자막 화면
+    # 53.6~54.3 은 2번 화각의 발연 1초 — 조각이라 따로 둠
+    'q1': dict(match='少ない油で発火', tags={
+        'smoke':      [(37, 49)],
+        'smoke_frag': [(53.6, 54.3)]}),
+
+    # 39~55초는 한 번 붙었다 꺼진 뒤의 연기. 물이 아니라 뚜껑으로 껐으므로 김은 아님
+    'j04': dict(match='シミュレーション', tags={
+        'smoke':        [(18, 28)],
+        'smoke_reheat': [(39, 55)]}),
+
+    # 55·63초에 초록 세로 띠(인코딩 결함). 그래서 발연을 64 부터 잡음
+    # 56~62 는 자막이 연기가 있다고 명시하나 은박 배경이라 화면에서 거의 안 보임
+    'j12': dict(match='2 東京防災', skip=[55, 63], tags={
+        'smoke':       [(64, 67), (73, 81)],
+        'smoke_faint': [(56, 62)]}),
+
+    # 50초는 뚜껑을 들어올릴 때 갇혀 있던 연기. 56~66 은 K급 소화약제라 뺌
+    # 자막이 하단에 있어 냄비 위 연기와 안 겹침
+    'kfire02': dict(match='자리를 비우면', tags={
+        'smoke':        [(11, 26)],
+        'smoke_reheat': [(50, 50)]}),
+
+    # 한 영상에 배경이 정반대인 두 구간. 25·79초는 디졸브
+    #   29~32   밝은 부엌 · 33초에 발화
+    #   80~89   검은 배경 · 발화로 안 이어짐. q1 다음으로 오려내기가 쉬움
+    '04': dict(match='Fire Prevention - Cooking Safety', tags={
+        'smoke':       [(29, 32), (80, 89)],
+        'smoke_faint': [(26, 28)]}),
+
+    # 슬로우모션. 1초 떨어진 프레임의 차이가 1.0~2.3 (같은 영상 화염 구간은 40~79)
+    # 162.2 부터 빨간 X 그래픽이 겹치므로 161 에서 끊음
+    '05': dict(match='Chat_ Cooking Fire Prevention', tags={
+        'smoke': [(154, 161)]}),
+
+    # 클로즈업과 야외 원거리가 번갈아 나옴. 아래는 클로즈업 구간만 골라낸 것
+    # 143~157 의 재가열 14초는 이전 판 기록에서 통째로 빠져 있었음
+    '07': dict(match='Fire Safety_ Grease Fires', tags={
+        'smoke':        [(39, 40), (44, 47), (55, 62), (65, 66), (72, 77), (80, 81)],
+        'smoke_reheat': [(94, 101), (106, 112), (143, 157)]}),
+
+    # 셰프 설명 컷이 계속 끼어듦. 135~140 은 팔뚝 흉터 클로즈업이라 무관
+    '12': dict(match='Deep-Frying', tags={
+        'smoke': [(85, 89), (92, 94), (107, 110), (116, 121), (131, 132)]}),
 }
 
 
-def sec(t):
-    p = [float(x) for x in str(t).split(':')]
-    while len(p) < 3:
-        p.insert(0, 0.0)
-    return p[0] * 3600 + p[1] * 60 + p[2]
+def norm(s):
+    """일본어 탁점·굽은 따옴표처럼 저장 방식에 따라 달라지는 글자를 맞춤."""
+    return unicodedata.normalize('NFC', s)
+
+
+def dhash(path, size=8):
+    a = np.asarray(Image.open(path).convert('L').resize((size + 1, size), Image.LANCZOS),
+                   dtype=np.int16)
+    return np.packbits((a[:, 1:] > a[:, :-1]).flatten())
+
+
+def ham(a, b):
+    return int(np.unpackbits(a ^ b).sum())
+
+
+def farthest_order(hs):
+    """최대다양 순서. 0번에서 시작해 이미 고른 것들에서 가장 먼 것을 차례로.
+    더 뽑을 서로 다른 것이 없으면 거기서 멈추고, 남은 것은 순서를 -1 로 둠."""
+    n = len(hs)
+    order, d = [0], [ham(hs[0], h) for h in hs]
+    while len(order) < n:
+        i = int(np.argmax(d))
+        if d[i] == 0:
+            break
+        order.append(i)
+        d = [min(x, ham(hs[i], h)) for x, h in zip(d, hs)]
+    rank = [-1] * n
+    for r, i in enumerate(order):
+        rank[i] = r
+    return rank
 
 
 drive.mount('/content/drive')
-vids = sorted(glob.glob(f'{SRC}/*.mp4') + glob.glob(f'{SRC}/*.MP4') +
-              glob.glob(f'{SRC}/*.mov') + glob.glob(f'{SRC}/*.MOV'))
-assert vids, f'{SRC} 에서 영상을 찾지 못했습니다'
-
-# 매칭 — 하나의 key 가 정확히 영상 하나에 붙는지 확인
-paths = {}
-for k, cfg in TIMELINE.items():
-    hit = [v for v in vids if cfg['match'].lower() in os.path.basename(v).lower()]
-    assert len(hit) == 1, f'{k}: "{cfg["match"]}" 에 맞는 영상이 {len(hit)}개 (1개여야 함)'
-    paths[k] = hit[0]
-    print(f'{k:<15} {os.path.basename(hit[0])[:64]}')
-print()
-
+allf = glob.glob(f'{SRC}/*')
 shutil.rmtree(OUT, ignore_errors=True)
-os.makedirs(OUT, exist_ok=True)
-shutil.rmtree('/content/smoke_sheets', ignore_errors=True)
-os.makedirs('/content/smoke_sheets', exist_ok=True)
-try:
-    F = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 26)
-except Exception:
-    F = ImageFont.load_default()
+os.makedirs(OUT)
 
-COLS, ROWS, CW = 6, 8, 400
-manifest, tally = [], {}
+manifest, missing = {}, []
+print(f'{"출처":<9}{"태그":<14}{"뽑음":>6}{"서로 다름":>10}')
+print('-' * 42)
 
-for k in TIMELINE:
-    src = paths[k]
-    bytag = {}
-    for tag, a, b in TIMELINE[k]['ranges']:
-        bytag.setdefault(tag, []).append((sec(a), sec(b), a, b))
+for key, cfg in TIMELINE.items():
+    hit = [p for p in allf if norm(cfg['match']) in norm(os.path.basename(p))]
+    if len(hit) != 1:
+        missing.append((key, cfg['match'], len(hit)))
+        print(f'{key:<9}[건너뜀] "{cfg["match"]}" 에 맞는 파일이 {len(hit)}개')
+        continue
+    src = hit[0]
+    crop = cfg.get('crop')
+    skip = set(cfg.get('skip', []))
+    manifest[key] = {'file': os.path.basename(src), 'tags': {}}
 
-    for tag, rngs in bytag.items():
-        d = f'{OUT}/{k}/{tag}'
+    for tag, ranges in cfg['tags'].items():
+        d = f'{OUT}/{tag}'
         os.makedirs(d, exist_ok=True)
-        n = 0
-        picked = []
-        for (t0, t1, a, b) in rngs:
-            tmp = '/content/_seg'
-            shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
-            subprocess.run(['ffmpeg', '-v', 'error', '-ss', f'{t0}', '-i', src,
-                            '-t', f'{t1 - t0}', '-vf', f'fps={FPS[tag]}',
+        tmp = '/content/_ex'
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp)
+
+        got = []
+        for a, b in ranges:
+            vf = f'fps={FPS}'
+            if crop:                       # 위·아래를 비율로 잘라냄
+                top, bot = crop
+                vf = f'crop=iw:ih*{1 - top - bot}:0:ih*{top},' + vf
+            # 한 구간에서 나오는 장수는 **(끝초 − 시작초) × FPS + 1** 임.
+            # 마지막 초는 `.0` 한 장뿐이고 `.5` 는 끝초를 넘음.
+            #
+            # 2026-08-11 에 이걸 `초수 × FPS` 로 잘못 세어 구간마다 한 장씩
+            # 빠진 줄 알았음. 07(여섯 구간)에서 여섯 장, 12(다섯 구간)에서
+            # 다섯 장이 모자라 보여 원인을 ffmpeg 로 단정했으나 **재 보니
+            # 추출은 처음부터 맞았고 예상 공식이 틀린 것이었음.**
+            #
+            # 지금은 넉넉히 뽑고 끝초를 넘는 것을 뒤에서 버림. 결과는 같으나
+            # 경계를 ffmpeg 에 맡기지 않고 초 값으로 직접 거르는 편이
+            # 나중에 헷갈리지 않음.
+            subprocess.run(['ffmpeg', '-v', 'error', '-ss', str(a), '-i', src,
+                            '-t', str(round(b - a + 1, 2)), '-vf', vf,
                             '-q:v', '2', f'{tmp}/%04d.jpg'], check=False)
-            for j, p in enumerate(sorted(glob.glob(f'{tmp}/*.jpg'))):
-                n += 1
-                t = t0 + j / FPS[tag]
-                name = f'{k}_{tag}_{n:03d}.jpg'
-                shutil.move(p, f'{d}/{name}')
-                picked.append((name, f'{d}/{name}', t))
-                manifest.append({'video': k, 'tag': tag, 'file': name,
-                                 'sec': round(t, 2), 'range': f'{a}-{b}'})
-            shutil.rmtree(tmp, ignore_errors=True)
+            ps = sorted(glob.glob(f'{tmp}/*.jpg'))
+            for j, p in enumerate(ps):
+                sec = round(a + j / FPS, 1)
+                if sec > b + 1e-6 or int(sec) in skip:
+                    os.remove(p);  continue
+                dst = f'{d}/{key}_{sec:07.1f}.jpg'.replace(' ', '0')
+                shutil.move(p, dst)
+                got.append((dst, sec))
+            for leftover in glob.glob(f'{tmp}/*.jpg'):
+                os.remove(leftover)
 
-        if not picked:
-            print(f'{k:<15} {tag:<12} 0장 — 추출 실패');  continue
-        tally[(k, tag)] = len(picked)
+        if not got:
+            print(f'{key:<9}{tag:<14}{"0":>6}   [추출 실패]')
+            continue
 
-        w0, h0 = Image.open(picked[0][1]).size
-        ch = round(CW * h0 / w0)
-        per = COLS * ROWS
-        for s in range(0, len(picked), per):
-            chunk = picked[s:s + per]
-            rows = (len(chunk) + COLS - 1) // COLS
-            sheet = Image.new('RGB', (COLS * CW, rows * ch), (20, 20, 20))
-            dr = ImageDraw.Draw(sheet)
-            for j, (nm, pp, t) in enumerate(chunk):
-                im = Image.open(pp).convert('RGB').resize((CW, ch))
-                x, y = (j % COLS) * CW, (j // COLS) * ch
-                sheet.paste(im, (x, y))
-                dr.rectangle([x, y, x + 150, y + 34], fill=(0, 0, 0))
-                dr.text((x + 5, y + 3), f'{nm.split("_")[-1][:3]} {t:.1f}s',
-                        fill=(255, 220, 0), font=F)
-                dr.rectangle([x, y, x + CW - 1, y + ch - 1], outline=(80, 80, 80))
-            sheet.save(f'/content/smoke_sheets/{k}__{tag}__{s // per + 1:02d}.jpg',
-                       quality=86)
-        print(f'{k:<15} {tag:<12} {len(picked):>4}장')
+        # 최대다양 순서는 학습에 쓰는 smoke 태그에만 매김
+        if tag == 'smoke':
+            rank = farthest_order([dhash(p) for p, _ in got])
+            uniq = sum(1 for r in rank if r >= 0)
+        else:
+            rank = list(range(len(got)))
+            uniq = len(got)
+
+        manifest[key]['tags'][tag] = [
+            {'file': os.path.basename(p), 'sec': s, 'rank': r}
+            for (p, s), r in zip(got, rank)]
+        print(f'{key:<9}{tag:<14}{len(got):>6}{uniq:>10}')
+
+    shutil.rmtree('/content/_ex', ignore_errors=True)
 
 json.dump(manifest, open(f'{OUT}/manifest.json', 'w'), ensure_ascii=False, indent=1)
-shutil.copy(f'{OUT}/manifest.json', '/content/smoke_sheets/manifest.json')
 
-print('\n' + '=' * 46)
-for tag in ['발연', '발연_재가열', '발연_조각', '발화']:
-    tot = sum(v for (k, t), v in tally.items() if t == tag)
-    srcn = len({k for (k, t) in tally if t == tag})
-    if tot:
-        print(f'{tag:<12} {tot:>5}장   출처 {srcn}개')
-print(f'{"합계":<12} {sum(tally.values()):>5}장')
+print('\n' + '=' * 42)
+for tag in ('smoke', 'smoke_faint', 'smoke_reheat', 'smoke_frag', 'smoke_mixed'):
+    n = len(glob.glob(f'{OUT}/{tag}/*.jpg'))
+    if n:
+        print(f'{tag:<14}{n:>6}장')
+cap = sum(min(32, sum(1 for x in v['tags'].get('smoke', []) if x['rank'] >= 0))
+          for v in manifest.values())
+print(f'\n상한 32 를 걸면 학습 후보 {cap}장 (평가 출처는 상한 없이 전부 씀)')
+print(f'-> {OUT}')
 
-shutil.make_archive('/content/smoke_sheets', 'zip', '/content/smoke_sheets')
-print(f'\n프레임 -> 드라이브 {OUT}')
-print(f'시트   -> smoke_sheets.zip  '
-      f'{os.path.getsize("/content/smoke_sheets.zip") / 1e6:.1f}MB')
-files.download('/content/smoke_sheets.zip')
+if missing:
+    print('\n[확인 필요] 드라이브에서 못 찾은 파일')
+    for k, m, n in missing:
+        print(f'  {k:<9}"{m}" 에 맞는 파일 {n}개')
+    print('  kfire03(Fire Prevention Week · DVIDS · 26.7MB)은 smoke_frames 에 올려야 함')
