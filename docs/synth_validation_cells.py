@@ -241,3 +241,62 @@ if fires:
 else:
     print('  conf>=0.25 헛불 0장.')
 print('\n※ 실제 음성 기준 = 합성 28장 예비치 대체. N 커서 신뢰도↑. presrc는 대조(비-급식실).')
+
+# ========== CELL 15: nofire_kitchen 헛불 재검증 — 전체+박스 & 박스확대 + 크기% + PNG저장 ==========
+# 원 몽타주는 저장 안 됐어 재생성. 결정론(같은 모델·이미지·conf) → 같은 7건. 판독 쉽게 확대·크기% 추가.
+import subprocess, sys, os
+try: import ultralytics
+except ImportError:
+    subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+import numpy as np, matplotlib.pyplot as plt, matplotlib.patches as patches
+
+W='/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'Drive 마운트 필요(CELL 1) — best.pt 없음: '+W
+hits=[r for r,_,_ in os.walk('/content/oilfire_real') if os.path.basename(r).lower()=='nofire_kitchen']
+assert hits, 'nofire_kitchen 폴더 없음 — CELL 14로 추출 먼저'
+KDIR=hits[0]; print('nofire_kitchen:', KDIR)
+EXTS=('.jpg','.jpeg','.png','.webp')
+imgs=sorted(os.path.join(KDIR,f) for f in os.listdir(KDIR) if f.lower().endswith(EXTS))
+print('이미지', len(imgs))
+
+m=YOLO(W); C0=0.25
+fa=[]   # (path, xyxy[keep], conf[keep], topconf)
+for ip in imgs:
+    r=m.predict(ip, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes)==0: continue
+    xy=r.boxes.xyxy.cpu().numpy(); cf=r.boxes.conf.cpu().numpy()
+    keep=cf>=C0
+    if keep.any(): fa.append((ip, xy[keep], cf[keep], float(cf.max())))
+fa.sort(key=lambda x:-x[3])
+
+print(f'\nconf>={C0} 헛불 {len(fa)}장 (박스 크기로 표시등[작음] vs 음식[큼] 구분):')
+for ip,xy,cf,tc in fa:
+    b=xy[int(cf.argmax())]; w=b[2]-b[0]; h=b[3]-b[1]
+    W0,H0=Image.open(ip).size
+    print(f'  {os.path.basename(ip):24} top {tc:.2f} · top박스 {int(w)}x{int(h)}px = 이미지의 {100*w*h/(W0*H0):.1f}%')
+
+if fa:
+    K=len(fa)
+    fig,ax=plt.subplots(K,2,figsize=(11,4.3*K)); ax=np.atleast_2d(ax)
+    for i,(ip,xy,cf,tc) in enumerate(fa):
+        im=Image.open(ip).convert('RGB'); W0,H0=im.size
+        ax[i,0].imshow(im)
+        for (x1,y1,x2,y2),c in zip(xy,cf):
+            ax[i,0].add_patch(patches.Rectangle((x1,y1),x2-x1,y2-y1,fill=False,edgecolor='red',linewidth=2.5))
+            ax[i,0].text(x1,max(0,y1-4),f'{c:.2f}',color='red',fontsize=10,weight='bold')
+        ax[i,0].set_title(f'{os.path.basename(ip)} · 전체',fontsize=9); ax[i,0].axis('off')
+        b=xy[int(cf.argmax())]; pad=max(30,(b[2]-b[0])*0.8,(b[3]-b[1])*0.8)
+        cx1=max(0,int(b[0]-pad)); cy1=max(0,int(b[1]-pad)); cx2=min(W0,int(b[2]+pad)); cy2=min(H0,int(b[3]+pad))
+        ax[i,1].imshow(im.crop((cx1,cy1,cx2,cy2)))
+        ax[i,1].add_patch(patches.Rectangle((b[0]-cx1,b[1]-cy1),b[2]-b[0],b[3]-b[1],fill=False,edgecolor='red',linewidth=2.5))
+        ax[i,1].set_title(f'top {tc:.2f} 박스 확대 — 안에 뭐가 있나?',fontsize=9); ax[i,1].axis('off')
+    plt.tight_layout()
+    OUT='/content/drive/MyDrive/kitchen_fp_verify.png'
+    plt.savefig(OUT, dpi=110, bbox_inches='tight'); plt.show()
+    print(f'\n저장 → {OUT}  (Drive/파일탐색기서 열어 확대·다운로드 가능)')
+    print('※ 오른쪽 확대크롭 안을 봐: 붉은 LED 표시등? 주황 음식? 수증기? 반사? — 네가 직접 판정')
+    print('  원본 이미지 직접 보려면: 파일탐색기 →', KDIR, '→ 위 파일명 더블클릭')
+else:
+    print('conf>=0.25 헛불 0장.')
