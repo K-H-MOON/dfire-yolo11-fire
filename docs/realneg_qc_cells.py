@@ -596,3 +596,105 @@ for i in range(rows*cols):
     if box: a.add_patch(patches.Rectangle((box[0],box[1]), box[2]-box[0], box[3]-box[1], fill=False, edgecolor='lime', linewidth=2))
 plt.tight_layout(); plt.savefig('/content/drive/MyDrive/synth_composite_v1/preview.png', dpi=90, bbox_inches='tight'); plt.show()
 print('v1 합성', K, '장 →', OUTI)
+
+
+# ========== CELL 20b: NIST 옥수수유 화재 스냅샷 확대 (4테스트 × 점화·peak, Colab-safe PD) ==========
+# 진단(크롭 크기·면적·md5)으로 6장 클린 확정: 중복 2(calphalon)·저품질 2(massloss ignition 면적<0.30) 드롭.
+import os, urllib.request, urllib.parse, glob
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'; os.makedirs(OUT, exist_ok=True)
+BASE = 'https://nist-el-nfrlhrr.s3.amazonaws.com/HRR/ASSET_FILES/'
+FIRE = {  # 이벤트 번호는 테스트마다 다름(웹확인값)
+ 'calphalon_ignition':'Corn Oil/video/1574198232-Evt3.jpg', 'calphalon_peak':'Corn Oil/video/1574198232-EvtP.jpg',
+ 'massloss13_ignition':'Hamins Kitchen/video/1508954077-Evt2.jpg', 'massloss13_peak':'Hamins Kitchen/video/1508954077-EvtP.jpg',
+ 'massloss14c_ignition':'Hamins Kitchen/video/1508958465-Evt2.jpg', 'massloss14c_peak':'Hamins Kitchen/video/1508958465-EvtP.jpg',
+ 'alumipan2_ignition':'Corn Oil/video/1574199884-Evt3.jpg', 'alumipan2_peak':'Corn Oil/video/1574199884-EvtP.jpg',
+}
+for tag, rel in FIRE.items():
+    url = urllib.parse.quote(BASE + rel, safe=':/'); dst = f'{OUT}/{tag}_FIRE__{os.path.basename(rel)}'
+    try:
+        data = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'}), timeout=60).read()
+        if data[:2] == b'\xff\xd8': open(dst,'wb').write(data); print('OK  ', tag, f'{len(data)//1024}KB')
+        else: print('NOT-JPEG', tag)
+    except Exception as e: print('FAIL', tag, str(e)[:60])
+print('저장 →', OUT, '· 이후 진단 셀로 md5중복·면적<0.30·<60px 드롭 → 6장 클린')
+
+
+# ========== CELL 23b: 합성 세트 생성 v2 — 클린 불꽃 × 스케일·위치 다양화 (soft-alpha, 스필 없음) ==========
+import os, glob, hashlib, numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as patches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+SRC = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+BG  = '/content/drive/MyDrive/realneg_frames/synth'
+OUT = '/content/drive/MyDrive/synth_composite_v2'; OUTI = f'{OUT}/images'; OUTL = f'{OUT}/labels'
+os.makedirs(OUTI, exist_ok=True); os.makedirs(OUTL, exist_ok=True)
+
+SEED, N_GEN = 0, 24                 # N_GEN 늘리면 학습용 대량 세트(798+)
+SCALE_RANGE, MIN_COVER, MIN_PX = (0.15, 0.40), 0.30, 60
+rng = np.random.default_rng(SEED)
+
+def extract_flame(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[...,0], im[...,1], im[...,2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None, 0.0
+    lbl, n = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    m = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0=max(0,xs.min()-pad); y0=max(0,ys.min()-pad); x1=min(im.shape[1]-1,xs.max()+pad); y1=min(im.shape[0]-1,ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*mm*255]).astype(np.uint8)), float(mm.mean())
+
+flames = []; seen = set()          # 클린 불꽃만(중복·저면적·너무작음 제외)
+for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+    md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
+    if md5 in seen: continue
+    fl, cov = extract_flame(p)
+    if fl is None or cov < MIN_COVER or max(fl.size) < MIN_PX: continue
+    seen.add(md5); flames.append((os.path.basename(p).split('__')[0], fl))
+print('클린 불꽃', len(flames), [n for n, _ in flames]); assert flames
+
+def paste(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, W = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, W), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[...,3:4] / 255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[...,:3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[...,3] / 255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True)); comps = []
+for i in range(N_GEN):
+    bp = bgs[int(rng.integers(len(bgs)))]; bg = Image.open(bp).convert('RGB'); W, H = bg.size
+    nm, fl = flames[int(rng.integers(len(flames)))]
+    scale = float(rng.uniform(*SCALE_RANGE)); th = int(H*scale); tw = max(1, int(fl.width*th/fl.height))
+    fl_r = fl.resize((tw, max(1, th)))
+    px = int(W*rng.uniform(0.30, 0.70) - tw/2); py = int(H*rng.uniform(0.45, 0.62) - th)
+    out, box = paste(bg, fl_r, px, py)
+    if box is None: continue
+    name = f'comp_{i:03d}.jpg'; out.save(f'{OUTI}/{name}', quality=92)
+    x0, y0, x1, y1 = box
+    open(f'{OUTL}/{name.replace(".jpg",".txt")}', 'w').write(
+        f'0 {(x0+x1)/2/W:.6f} {(y0+y1)/2/H:.6f} {(x1-x0)/W:.6f} {(y1-y0)/H:.6f}\n')
+    comps.append((f'{OUTI}/{name}', box, nm, round(scale, 2)))
+
+K = len(comps); cols = 4; rows = (K + cols - 1) // cols
+fig, ax = plt.subplots(rows, cols, figsize=(4*cols, 3*rows)); ax = np.array(ax).reshape(rows, cols)
+for i in range(rows*cols):
+    a = ax[i//cols, i%cols]; a.axis('off')
+    if i >= K: continue
+    p, box, nm, sc = comps[i]; a.imshow(Image.open(p))
+    a.add_patch(patches.Rectangle((box[0], box[1]), box[2]-box[0], box[3]-box[1], fill=False, edgecolor='lime', linewidth=2))
+    a.set_title(f'{nm} s{sc}', fontsize=7)
+plt.tight_layout(); plt.savefig(f'{OUT}/preview.png', dpi=90, bbox_inches='tight'); plt.show()
+print('합성 v2', K, '장 →', OUTI)
