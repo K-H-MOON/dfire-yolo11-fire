@@ -483,3 +483,215 @@ for j in range(K,rows*4):
     ax[j//4,(j%4)*2].axis('off'); ax[j//4,(j%4)*2+1].axis('off')
 plt.tight_layout(); plt.show()
 print('※ 같은 장면 많으면 정직 baseline은 t980(0.660)쪽 · 다른 장면이면 t990(0.675)쪽.')
+
+# ========== CELL 9: recall천장 미검출 분해 (모델 한계 vs 라벨 오류) ==========
+# ptrain_b79를 conf≈0으로 돌려, 어떤 conf서도 IoU≥0.5로 안 잡히는 GT fire 박스(=천장 미검출)를
+# 전부 추출 → maxIoU 분포 + 크롭 몽타주로 "진짜 불(모델한계) vs 라벨오류/오배치" 육안 분해.
+# 전제: CELL 1(Drive 마운트) — best.pt가 Drive에 있음. 데이터 /content/dfire_fireonly(CELL 3).
+import subprocess, sys, os, glob, numpy as np
+try: import ultralytics
+except ImportError:
+    subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+W='/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'Drive 마운트 필요(CELL 1) — best.pt 없음: '+W
+TESTDIR='/content/dfire_fireonly/test'
+assert os.path.isdir(TESTDIR), 'CELL 3(dfire_fireonly) 먼저'
+EXTS=('*.jpg','*.jpeg','*.png','*.webp','*.bmp')
+def imgs_of(d):
+    ps=[]
+    for e in EXTS: ps+=glob.glob(os.path.join(d,e))+glob.glob(os.path.join(d,e.upper()))
+    return sorted(set(ps))
+imgs=imgs_of(f'{TESTDIR}/images')
+print(f'test 이미지 {len(imgs)}')
+
+def gt_boxes(imgp):
+    lp=f'{TESTDIR}/labels/'+os.path.splitext(os.path.basename(imgp))[0]+'.txt'
+    out=[]
+    if os.path.exists(lp):
+        for ln in open(lp):
+            t=ln.split()
+            if len(t)>=5:
+                try: out.append(tuple(float(x) for x in t[1:5]))
+                except ValueError: pass
+    return out
+
+def max_iou(a, B):
+    if len(B)==0: return 0.0
+    ax1,ay1,ax2,ay2=a
+    ix1=np.maximum(ax1,B[:,0]); iy1=np.maximum(ay1,B[:,1])
+    ix2=np.minimum(ax2,B[:,2]); iy2=np.minimum(ay2,B[:,3])
+    iw=np.clip(ix2-ix1,0,None); ih=np.clip(iy2-iy1,0,None); inter=iw*ih
+    aA=(ax2-ax1)*(ay2-ay1); aB=(B[:,2]-B[:,0])*(B[:,3]-B[:,1])
+    u=aA+aB-inter
+    return float(np.max(np.where(u>0, inter/u, 0.0)))
+
+model=YOLO(W)
+misses=[]; tot_gt=0
+for k,imgp in enumerate(imgs):
+    gts=gt_boxes(imgp)
+    if not gts: continue
+    Wd,Hd=Image.open(imgp).size
+    r=model.predict(imgp, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    pb=r.boxes.xyxy.cpu().numpy() if (r.boxes is not None and len(r.boxes)) else np.zeros((0,4))
+    for (cx,cy,w,h) in gts:
+        tot_gt+=1
+        box=((cx-w/2)*Wd,(cy-h/2)*Hd,(cx+w/2)*Wd,(cy+h/2)*Hd)
+        mi=max_iou(box, pb)
+        if mi<0.5: misses.append((imgp, box, mi))
+    if (k+1)%200==0: print(f'  {k+1}/{len(imgs)}')
+
+nm=len(misses); mi_arr=np.array([m[2] for m in misses]) if nm else np.zeros(0)
+print(f'\nGT fire 박스 총 {tot_gt} · 천장 미검출(maxIoU<0.5) {nm} ({100*nm/max(1,tot_gt):.1f}%)')
+if nm:
+    print(f'  완전미검 maxIoU<0.1: {int((mi_arr<0.1).sum())} ({100*(mi_arr<0.1).mean():.0f}% of misses) = 모델이 아무것도 못본 것(라벨오류 or 진짜 어려움)')
+    print(f'  근접실패 [0.1,0.5): {int(((mi_arr>=0.1)&(mi_arr<0.5)).sum())} = 위치 어긋남(경계/라벨 오배치)')
+
+# 최악부터(maxIoU 오름차순) 크롭 몽타주 — 완전미검이 먼저 = 라벨오류 후보
+misses.sort(key=lambda m:m[2])
+K=min(30,nm); cols=6; rows=max(1,(K+cols-1)//cols)
+fig,ax=plt.subplots(rows,cols,figsize=(3*cols,3.1*rows)); ax=np.atleast_2d(ax)
+for i in range(rows*cols):
+    a=ax[i//cols,i%cols]; a.axis('off')
+    if i>=K: continue
+    imgp,(x1,y1,x2,y2),miou=misses[i]
+    im=Image.open(imgp).convert('RGB'); Wd,Hd=im.size
+    pad=max(24,(x2-x1)*0.6,(y2-y1)*0.6)
+    cx1=max(0,int(x1-pad)); cy1=max(0,int(y1-pad)); cx2=min(Wd,int(x2+pad)); cy2=min(Hd,int(y2+pad))
+    a.imshow(im.crop((cx1,cy1,cx2,cy2)))
+    a.add_patch(patches.Rectangle((x1-cx1,y1-cy1),x2-x1,y2-y1,fill=False,edgecolor='red',linewidth=2))
+    a.set_title(f'IoU {miou:.2f} · {os.path.basename(imgp)[:12]}',fontsize=7)
+plt.tight_layout(); plt.show()
+print('※ 빨강=라벨된 GT 불박스. 안에 진짜 불 → 모델한계 / 불 없거나 딴것 → 라벨오류. IoU~0=모델이 그 자리서 아무것도 못봄.')
+
+# ========== CELL 10: recall천장 IoU 스윕 + near-miss 겹친예측 신뢰도 (육안→수치 확정) ==========
+# (1) recall천장을 IoU 0.1~0.5로 스윕 → "문턱 낮추면 miss 되살아남 = 위치문제"를 수치화.
+# (2) near-miss(0.1≤IoU<0.5) GT마다 '겹치는(IoU≥0.1) 예측 중 최대 conf' → "모델이 그 불을 자신있게 찍었나" 수치화.
+# 전제: CELL 1(Drive) + CELL 3(dfire_fireonly). 세션에 CELL 9 돌았으면 그대로 됨.
+import subprocess, sys, os, glob, numpy as np
+try: import ultralytics
+except ImportError:
+    subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+
+W='/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'Drive 마운트 필요(CELL 1) — best.pt 없음: '+W
+TESTDIR='/content/dfire_fireonly/test'
+assert os.path.isdir(TESTDIR), 'CELL 3(dfire_fireonly) 먼저'
+EXTS=('*.jpg','*.jpeg','*.png','*.webp','*.bmp')
+def imgs_of(d):
+    ps=[]
+    for e in EXTS: ps+=glob.glob(os.path.join(d,e))+glob.glob(os.path.join(d,e.upper()))
+    return sorted(set(ps))
+imgs=imgs_of(f'{TESTDIR}/images')
+print(f'test 이미지 {len(imgs)}')
+
+def gt_boxes(imgp):
+    lp=f'{TESTDIR}/labels/'+os.path.splitext(os.path.basename(imgp))[0]+'.txt'
+    out=[]
+    if os.path.exists(lp):
+        for ln in open(lp):
+            t=ln.split()
+            if len(t)>=5:
+                try: out.append(tuple(float(x) for x in t[1:5]))
+                except ValueError: pass
+    return out
+
+def iou_all(a, B):   # IoU of GT box a vs each pred box in B (Nx4 xyxy)
+    if len(B)==0: return np.zeros(0)
+    ax1,ay1,ax2,ay2=a
+    ix1=np.maximum(ax1,B[:,0]); iy1=np.maximum(ay1,B[:,1])
+    ix2=np.minimum(ax2,B[:,2]); iy2=np.minimum(ay2,B[:,3])
+    iw=np.clip(ix2-ix1,0,None); ih=np.clip(iy2-iy1,0,None); inter=iw*ih
+    aA=(ax2-ax1)*(ay2-ay1); aB=(B[:,2]-B[:,0])*(B[:,3]-B[:,1])
+    u=aA+aB-inter
+    return np.where(u>0, inter/u, 0.0)
+
+model=YOLO(W)
+rows=[]   # (maxIoU, best_conf_among_overlap)
+for k,imgp in enumerate(imgs):
+    gts=gt_boxes(imgp)
+    if not gts: continue
+    Wd,Hd=Image.open(imgp).size
+    r=model.predict(imgp, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is not None and len(r.boxes):
+        pb=r.boxes.xyxy.cpu().numpy(); pc=r.boxes.conf.cpu().numpy()
+    else:
+        pb=np.zeros((0,4)); pc=np.zeros(0)
+    for (cx,cy,w,h) in gts:
+        box=((cx-w/2)*Wd,(cy-h/2)*Hd,(cx+w/2)*Wd,(cy+h/2)*Hd)
+        ious=iou_all(box, pb)
+        if len(ious)==0:
+            rows.append((0.0,0.0)); continue
+        mi=float(ious.max())
+        ov=ious>=0.1
+        bc=float(pc[ov].max()) if bool(ov.any()) else 0.0
+        rows.append((mi,bc))
+    if (k+1)%200==0: print(f'  {k+1}/{len(imgs)}')
+
+R=np.array(rows); mIoU=R[:,0]; conf=R[:,1]; N=len(R)
+print(f'\nGT fire 박스 {N}')
+print('=== (1) recall천장 IoU 스윕 (conf≈0 커버리지) ===')
+for T in (0.10,0.20,0.30,0.40,0.50):
+    cov=float((mIoU>=T).mean()); print(f'  IoU>={T:.2f} -> recall천장 {cov:.3f}  (miss {100*(1-cov):.1f}%)')
+
+band=(mIoU>=0.1)&(mIoU<0.5); cb=conf[band]
+print(f'\n=== (2) near-miss 0.1<=IoU<0.5 = {int(band.sum())}장 · 겹친 예측 최대 conf ===')
+if len(cb):
+    print(f'  conf 중앙값 {np.median(cb):.3f} · 평균 {cb.mean():.3f} · 최소 {cb.min():.3f} · 최대 {cb.max():.3f}')
+    for c in (0.05,0.10,0.25,0.50):
+        print(f'  conf>={c:.2f}: {int((cb>=c).sum())}/{len(cb)} ({100*(cb>=c).mean():.0f}%)')
+blind=int((mIoU<0.1).sum())
+print(f'\n총실명 IoU<0.1: {blind}장 ({100*blind/N:.1f}%) · 근접실패: {int(band.sum())}장 ({100*band.mean():.1f}%) · 정상 IoU>=0.5: {int((mIoU>=0.5).sum())}장')
+print('※ 스윕서 문턱 낮출수록 recall천장 오름 = miss가 위치문제(느슨하면 되살아남). near-miss conf 높음 = 모델이 그 불을 자신있게 찍음. 둘 다 수치.')
+
+# ========== CELL 11: 이미지 단위 recall(배포 실효 놓침) + 음성 오경보율 — conf 스윕 ==========
+# 박스 위치 무관·배포 경보 관점: 불 있는 이미지 중 '검출 1개라도 발화'한 비율 = 이미지 recall.
+# recall은 conf 낮추면 부풀려지므로 음성 이미지 오경보율(발화율)을 같이 재서 정직하게 대비.
+# 전제: CELL 1(Drive) + CELL 3(dfire_fireonly). full test(누수 포함 — 양성 누수는 쉬워서 약간 낙관, 주석).
+import subprocess, sys, os, glob, numpy as np
+try: import ultralytics
+except ImportError:
+    subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+
+W='/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'Drive 마운트 필요(CELL 1) — best.pt 없음: '+W
+TESTDIR='/content/dfire_fireonly/test'
+assert os.path.isdir(TESTDIR), 'CELL 3(dfire_fireonly) 먼저'
+EXTS=('*.jpg','*.jpeg','*.png','*.webp','*.bmp')
+def imgs_of(d):
+    ps=[]
+    for e in EXTS: ps+=glob.glob(os.path.join(d,e))+glob.glob(os.path.join(d,e.upper()))
+    return sorted(set(ps))
+imgs=imgs_of(f'{TESTDIR}/images')
+def has_fire(imgp):
+    lp=f'{TESTDIR}/labels/'+os.path.splitext(os.path.basename(imgp))[0]+'.txt'
+    return os.path.exists(lp) and os.path.getsize(lp)>0
+pos=[p for p in imgs if has_fire(p)]; neg=[p for p in imgs if not has_fire(p)]
+print(f'양성(불) {len(pos)} · 음성 {len(neg)} · 총 {len(imgs)}')
+
+model=YOLO(W)
+def top_conf(imgp):
+    r=model.predict(imgp, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is not None and len(r.boxes): return float(r.boxes.conf.max())
+    return 0.0
+mc={}
+for k,p in enumerate(imgs):
+    mc[p]=top_conf(p)
+    if (k+1)%200==0: print(f'  {k+1}/{len(imgs)}')
+pos_mc=np.array([mc[p] for p in pos]); neg_mc=np.array([mc[p] for p in neg])
+
+print('\n=== 이미지 단위 (박스 위치 무관·배포 경보 관점) ===')
+print(f'{"conf":>6}{"이미지recall":>14}{"배포놓침":>10}{"음성오경보":>12}')
+for C in (0.05,0.10,0.25,0.40,0.50):
+    rec=float((pos_mc>=C).mean()); fp=float((neg_mc>=C).mean())
+    print(f'{C:>6.2f}{rec:>14.3f}{100*(1-rec):>9.1f}%{fp:>12.3f}')
+print('\n※ 이미지recall = 불 있는 이미지 중 검출 발화 비율 · 배포놓침 = 1-recall · 음성오경보 = 불 없는 이미지 발화 비율.')
+print('  full test라 양성 누수(쉬움)가 recall 약간 낙관 — 참고. 박스 IoU 무관이라 recall천장(0.906)보다 높음이 정상.')
