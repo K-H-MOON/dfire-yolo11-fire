@@ -511,3 +511,88 @@ for i in range(rows*cols):
     a.set_title(f'top {t:.2f}', fontsize=9)
 plt.tight_layout(); plt.savefig('/content/drive/MyDrive/synth_composite_v0/base_detect.png',dpi=90,bbox_inches='tight'); plt.show()
 print('검출 시각화 저장.')
+
+
+# ========== CELL 23: 합성 v1 — 광원 스필 + 엣지 페더링 + 팬 위 배치 (프리멀티플라이드) ==========
+# ★실측 결론(진단): 스필(screen)·페더는 밝은 스테인리스 주방서 저ROI(크랭크1.5도 육안 무차). v0/v1 소프트알파로 충분.
+#   → 파이프라인 인프라(프리멀티 over·배치)는 유지, 스필은 이 도메인 무효로 판정. 레버=불꽃다양성+실양성.
+import os, glob, numpy as np
+from scipy import ndimage
+from scipy.ndimage import gaussian_filter
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as patches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+SRC  = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+BG   = '/content/drive/MyDrive/realneg_frames/synth'
+OUTI = '/content/drive/MyDrive/synth_composite_v1/images'
+OUTL = '/content/drive/MyDrive/synth_composite_v1/labels'
+os.makedirs(OUTI, exist_ok=True); os.makedirs(OUTL, exist_ok=True)
+
+def extract_flame(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[...,0], im[...,1], im[...,2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, n = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    m = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0=max(0,xs.min()-pad); y0=max(0,ys.min()-pad); x1=min(im.shape[1]-1,xs.max()+pad); y1=min(im.shape[0]-1,ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*mm*255]).astype(np.uint8))
+
+flames = {}
+for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+    f = extract_flame(p)
+    if f: flames[os.path.basename(p).split('__')[0]] = f
+assert flames, '불꽃 추출 실패 — CELL 20 먼저'
+print('불꽃', list(flames), [f.size for f in flames.values()])
+
+FLAME_H, FEATHER, SPILL_STR, SPILL_FRAC = 0.30, 2.5, 0.45, 0.5   # 튜너블(스필은 이 도메인 저ROI)
+def screen(a, b): return 1 - (1 - a) * (1 - b)
+
+def composite_v1(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32) / 255.; H, W = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W, px + fw); y1 = min(H, py + fh)
+    fx0, fy0 = x0c - px, y0c - py; rw, rh = x1 - x0c, y1 - y0c
+    Ep = np.zeros((H, W, 3), np.float32); A = np.zeros((H, W), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[...,3:4] / 255.
+        Ep[y0c:y0c+rh, x0c:x0c+rw] = (reg[...,:3] / 255.) * a
+        A[y0c:y0c+rh, x0c:x0c+rw]  = reg[...,3] / 255.
+    ssig = max(4.0, FLAME_H * H * SPILL_FRAC)
+    out = screen(bg, gaussian_filter(Ep, sigma=(ssig, ssig, 0)) * SPILL_STR)
+    Ep_f = gaussian_filter(Ep, sigma=(FEATHER, FEATHER, 0)); A_f = gaussian_filter(A, sigma=FEATHER)[..., None]
+    out = np.clip(out * (1 - A_f) + Ep_f, 0, 1)
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray((out * 255).astype(np.uint8)), box
+
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
+sel = [bgs[i] for i in np.linspace(0, len(bgs)-1, 12).round().astype(int)]
+keys = list(flames); comps = []
+for i, bp in enumerate(sel):
+    bg = Image.open(bp).convert('RGB'); W, H = bg.size
+    fl = flames[keys[i % len(keys)]]
+    th = int(H * FLAME_H); tw = max(1, int(fl.width * th / fl.height)); fl_r = fl.resize((tw, max(1, th)))
+    jit = (i % 3 - 1) * int(W * 0.08)
+    px = int(W*0.5 - tw/2) + jit; py = int(H*0.60 - th)
+    out, box = composite_v1(bg, fl_r, px, py)
+    name = f'comp_{i:03d}.jpg'; out.save(f'{OUTI}/{name}', quality=92)
+    if box:
+        x0, y0, x1, y1 = box
+        open(f'{OUTL}/{name.replace(".jpg",".txt")}', 'w').write(
+            f'0 {(x0+x1)/2/W:.6f} {(y0+y1)/2/H:.6f} {(x1-x0)/W:.6f} {(y1-y0)/H:.6f}\n')
+    comps.append((f'{OUTI}/{name}', box))
+
+K = len(comps); cols = 4; rows = (K + cols - 1) // cols
+fig, ax = plt.subplots(rows, cols, figsize=(4*cols, 3*rows)); ax = np.array(ax).reshape(rows, cols)
+for i in range(rows*cols):
+    a = ax[i//cols, i%cols]; a.axis('off')
+    if i >= K: continue
+    p, box = comps[i]; a.imshow(Image.open(p))
+    if box: a.add_patch(patches.Rectangle((box[0],box[1]), box[2]-box[0], box[3]-box[1], fill=False, edgecolor='lime', linewidth=2))
+plt.tight_layout(); plt.savefig('/content/drive/MyDrive/synth_composite_v1/preview.png', dpi=90, bbox_inches='tight'); plt.show()
+print('v1 합성', K, '장 →', OUTI)
