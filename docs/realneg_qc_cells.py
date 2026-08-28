@@ -379,3 +379,135 @@ try:
         print('  conf>=0.25 헛불 0장.')
 except Exception as e:
     print('몽타주 스킵:', str(e)[:80])
+
+
+# ========== (A) 합성 파이프라인 v0 — CELL 20~22 ==========
+# 소스 결정: NIST Stovetop 옥수수유 화재 스냅샷(퍼블릭도메인 추정·발표 전 약관확인). MP4는 HRR오버레이 타임랩스라 폐기, 스냅샷 JPG만.
+# (CELL 19=오일화재 로컬 인벤토리는 공개데이터셋 경로로 대체돼 미수록.)
+
+# ========== CELL 20: NIST Stovetop 옥수수유 화재 스냅샷 다운로드 ==========
+import os, urllib.request, urllib.parse, glob
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+OUT = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+os.makedirs(OUT, exist_ok=True)
+BASE = 'https://nist-el-nfrlhrr.s3.amazonaws.com/HRR/ASSET_FILES/Corn Oil/video'
+imgs = {'1574198232-Evt1.jpg':'fuel_pour', '1574198232-Evt2.jpg':'heating_on',
+        '1574198232-Evt3.jpg':'ignition_FIRE', '1574198232-EvtP.jpg':'peak_FIRE',
+        '1574198232-Evt4.jpg':'fire_out'}
+for fn, tag in imgs.items():
+    url = urllib.parse.quote(f'{BASE}/{fn}', safe=':/')
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        data = urllib.request.urlopen(req, timeout=60).read()
+        if data[:2] == b'\xff\xd8':
+            open(f'{OUT}/{tag}__{fn}', 'wb').write(data); print('OK  ', tag, f'{len(data)//1024}KB')
+        else:
+            print('NOT-JPEG', tag)
+    except Exception as e:
+        print('FAIL', tag, str(e)[:60])
+print('저장 →', OUT)
+
+
+# ========== CELL 21: NIST 오일 불꽃 크롭(마스킹) + synth 배경 합성 v0 + 미리보기 ==========
+import os, glob, numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as patches
+
+SRC  = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+BG   = '/content/drive/MyDrive/realneg_frames/synth'
+OUTI = '/content/drive/MyDrive/synth_composite_v0/images'
+OUTL = '/content/drive/MyDrive/synth_composite_v0/labels'
+os.makedirs(OUTI, exist_ok=True); os.makedirs(OUTL, exist_ok=True)
+
+def extract_flame(path):     # 어두운 배경 → 주황∪백열 마스크 + 최대 연결성분(잡픽셀 제거) + 소프트 알파
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[...,0], im[...,1], im[...,2]
+    lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, n = ndimage.label(mask)
+    counts = np.bincount(lbl.ravel()); counts[0] = 0
+    m = ndimage.binary_dilation(lbl == counts.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0=max(0,xs.min()-pad); y0=max(0,ys.min()-pad)
+    x1=min(im.shape[1]-1,xs.max()+pad); y1=min(im.shape[0]-1,ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160.0, 0, 1) * mm * 255]).astype(np.uint8))
+
+flames = {}
+for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+    f = extract_flame(p)
+    if f: flames[os.path.basename(p).split('__')[0]] = f
+print('추출 불꽃:', list(flames), [f.size for f in flames.values()])
+assert flames, '불꽃 추출 실패'
+
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
+sel = [bgs[i] for i in np.linspace(0, len(bgs)-1, 12).round().astype(int)]
+keys = list(flames); comps = []
+for i, bp in enumerate(sel):
+    bg = Image.open(bp).convert('RGB'); W, H = bg.size
+    fl = flames[keys[i % len(keys)]]
+    th = int(H*0.35); tw = max(1, int(fl.width*th/fl.height))
+    fl_r = fl.resize((tw, max(1, th)))
+    px = int(W*0.5 - tw/2); py = int(H*0.55 - th/2)     # v0: 위치 대충(frozen-base recall 무관)
+    canvas = bg.convert('RGBA'); canvas.alpha_composite(fl_r, (px, py))
+    canvas.convert('RGB').save(f'{OUTI}/comp_{i:03d}.jpg', quality=92)
+    a = np.asarray(fl_r)[...,3]; ys, xs = np.where(a > 10)
+    bx0,by0,bx1,by1 = px+xs.min(), py+ys.min(), px+xs.max(), py+ys.max()
+    open(f'{OUTL}/comp_{i:03d}.txt','w').write(
+        f'0 {(bx0+bx1)/2/W:.6f} {(by0+by1)/2/H:.6f} {(bx1-bx0)/W:.6f} {(by1-by0)/H:.6f}\n')
+    comps.append((f'{OUTI}/comp_{i:03d}.jpg', (bx0,by0,bx1,by1)))
+
+K=len(comps); cols=4; rows=(K+cols-1)//cols
+fig,ax=plt.subplots(rows,cols,figsize=(4*cols,3*rows)); ax=np.array(ax).reshape(rows,cols)
+for i in range(rows*cols):
+    a=ax[i//cols,i%cols]; a.axis('off')
+    if i>=K: continue
+    p,(x0,y0,x1,y1)=comps[i]; a.imshow(Image.open(p))
+    a.add_patch(patches.Rectangle((x0,y0),x1-x0,y1-y0,fill=False,edgecolor='lime',linewidth=2))
+plt.tight_layout(); plt.savefig('/content/drive/MyDrive/synth_composite_v0/preview.png',dpi=90,bbox_inches='tight'); plt.show()
+print('합성', K, '장 저장 →', OUTI)
+
+
+# ========== CELL 22: 합성 v0에 base(ptrain_b79) recall — base가 합성 불을 잡나 ==========
+import os, glob, subprocess, sys
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np, matplotlib.pyplot as plt, matplotlib.patches as patches
+from PIL import Image
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'best.pt 없음: ' + W
+IMG = '/content/drive/MyDrive/synth_composite_v0/images'
+imgs = sorted(glob.glob(f'{IMG}/*.jpg')); assert imgs, '합성 이미지 없음 — CELL 21 먼저'
+
+m = YOLO(W); CONFS = (0.05, 0.25, 0.50); det = []
+for ip in imgs:
+    r = m.predict(ip, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    has = (r.boxes is not None and len(r.boxes))
+    tc = float(r.boxes.conf.max().cpu()) if has else 0.0
+    xy = r.boxes.xyxy.cpu().numpy() if has else np.zeros((0,4))
+    cf = r.boxes.conf.cpu().numpy() if has else np.zeros(0)
+    det.append((ip, tc, xy, cf))
+tc = np.array([d[1] for d in det]); N = len(det)
+print(f'=== 합성 v0 · base recall · N={N} ===')
+for c in CONFS: print(f'  conf>={c:.2f}: recall {(tc>=c).mean():.3f}  ({int((tc>=c).sum())}/{N})')
+print('  top conf:', np.round(sorted(tc, reverse=True), 2))
+# ※ recall 1.0 = 프록시 천장(실 불꽃은 base가 무조건 검출) → 판별력 없음. 다음=ablation(스케일·열화 sweep).
+
+C0 = 0.25; K = len(det); cols = 4; rows = (K + cols - 1) // cols
+fig, ax = plt.subplots(rows, cols, figsize=(4*cols, 3*rows)); ax = np.array(ax).reshape(rows, cols)
+for i in range(rows*cols):
+    a = ax[i//cols, i%cols]; a.axis('off')
+    if i >= K: continue
+    ip, t, xy, cf = det[i]; a.imshow(Image.open(ip))
+    for (x1,y1,x2,y2), c in zip(xy, cf):
+        if c >= C0: a.add_patch(patches.Rectangle((x1,y1),x2-x1,y2-y1,fill=False,edgecolor='red',linewidth=2))
+    a.set_title(f'top {t:.2f}', fontsize=9)
+plt.tight_layout(); plt.savefig('/content/drive/MyDrive/synth_composite_v0/base_detect.png',dpi=90,bbox_inches='tight'); plt.show()
+print('검출 시각화 저장.')

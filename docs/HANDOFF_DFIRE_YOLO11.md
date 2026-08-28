@@ -1,6 +1,12 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
-**상태(2026-08-28): 파이프라인 1·2번 완료 · 3번 우회(게이트 통과) · 현재 4번(합성 파이프라인 R&D) 진입 지점.** (파이프라인 6단계 = §프로젝트 파이프라인.)
+**상태(2026-08-28): 파이프라인 1·2번 완료 · 3번 우회 · 4번(합성 파이프라인) 진행 중 — v0 배관 완료.** (파이프라인 6단계 = §프로젝트 파이프라인.)
+
+**▶ 4번 진행 로그·기준 = `docs/PREREGISTER_DFIRE_QC.md`, 셀 = `docs/realneg_qc_cells.py`(CELL 16~22).** 요약:
+- **실배경/실음성 재빌드(누수통제)**: hankookro 조리영상 28개→QC(오토틸팅1 제외)→학교단위 분할 **eval 5교 684장 / synth 8교 798장**(교집합∅). Drive `realneg_frames/{eval,synth}/`.
+- **base FP 재측정**(구 nofire_kitchen 3.9% 대체): eval서 **conf0.25 0.7%·0.50 0%**(트리거=붉은버튼·주황테이프 색혼동, 불꽃0). recall(B)는 실양성0이라 미측정.
+- **(A) 합성 v0**: 불소스=NIST Stovetop 옥수수유 스냅샷(ignition·peak 2장, Drive `firecrop_src/`) → synth 배경에 copy-paste 합성(`synth_composite_v0/`) → **base recall 1.0@all conf(프록시 천장·판별력 없음)**. 배관 확인까지.
+- **다음 = ablation(스케일·열화 sweep로 검출 envelope)·합성유발FP·소스확대(옥수수유 4테스트/소방청/AI-Hub71751=recall B 후보). 위치는 base recall 무관·학습 shortcut 방지용.**
 
 ## ▶▶▶ 다음 세션 재개 레시피
 1. 이 문서 전체 읽기 + `docs/synth_validation_cells.py`(CELL 12~15 = 합성 검증·헛불).
