@@ -1,13 +1,17 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
-**상태: Phase 0 baseline 확정 (2026-08-28).** 다음 = Phase 1 진단.
+**상태(2026-08-28): 파이프라인 1·2번 완료 · 3번 우회(게이트 통과) · 현재 4번(합성 파이프라인 R&D) 진입 지점.** (파이프라인 6단계 = §프로젝트 파이프라인.)
 
 ## ▶▶▶ 다음 세션 재개 레시피
-1. 이 문서 전체 읽기.
-2. baseline은 **확정**됨(아래 §결과). 재학습 불필요 — 모델은 Drive에 생존.
-3. 다음 단계 = **Phase 1 진단** 또는 미제(§미제) 중 사용자 선택.
-4. 전체 Colab 셀 = `docs/dfire_baseline_cells.py` (CELL 1~11, 검증됨). 보조 셀: `docs/colab_rebuild_full.py`(셀1~5 재빌드 일괄 · 하드게이트 포함) · `docs/count_splits.py`(split·접두사 실측) · `docs/colab_src_breakdown.py`(출처별 성능) · `docs/colab_leak_by_source.py`(출처별 누수). 런타임 끊기면 `/content` 초기화·**Drive 모델 생존** → 재빌드: CELL 1(마운트)→2(다운로드+dedup, **api_key 필요**)→3(cap1)→4(ptrain). 학습(CELL 5)은 Drive 모델 있으면 skip. 누수 감사(6/7/8)는 `/content` 데이터셋만 필요(모델·Drive 불요, CELL 8은 마운트도 불요).
-5. **§행동원칙** 준수.
+1. 이 문서 전체 읽기 + `docs/synth_validation_cells.py`(CELL 12~15 = 합성 검증·헛불).
+2. **완료**: baseline `ptrain_b79`(정직 mAP50 0.660·recall천장 0.894) · 합성 검증(§합성 데이터 검증: recall0.8 게이트 통과) · 헛불(B) 실데이터(실 급식실 3.9% 낮음·트리거=주황물체/색혼동·수증기아님). 재학습 불필요(모델 Drive 생존).
+3. **다음 = 사용자 선택 3갈래**:
+   - **(가) 실내 실데이터 후보 웹검색 확정** — 다른 세션 보고서가 준 후보(**AI-Hub 한국 "화재감시"[inout/place음식점/fire_level]=1순위** · Home-fire[가정·CC BY-NC] · Zenodo Indoor Fire Smoke · NIST FCD)는 **전부 미검증(내가 웹확인 안함·arxiv 인용 수상)**. 웹검색으로 실재/접근/실내비중 확정 → 통과시 **(B) 실내 held-out** 세워 "합성품질 vs 도메인갭" 교란분리. ⚠️받으면 D-Fire처럼 dedup/누수/라벨 QC 필수·"실내"≠"급식실 조리".
+   - **(나) 4번 진입** — 합성 파이프라인 R&D(생성기 비교·aug/noise 유의미성·GAN/diffusion). 지표=(A)base-on-합성 recall/precision(프록시). 겨냥음성=주황물체·색혼동. 4→5(생성)→6(base 재검증) 루프.
+   - **(다) 3번** — 실외(D-Fire) pretrain→실내 소량 fine-tune(대안전략과 일치).
+4. **★(A)vs(B)**: (A)=base가 합성 인식하나(리얼리즘 프록시·빠름·2번서 실행·필요조건이나 충분조건 아님) · (B)=합성으로 학습시 실 실내 성능 오르나(실전 유용성·실내 실데이터 필요). 6번 정의=(A). "실전 유용"은 (B)라야 닫힘.
+5. 전체 Colab 셀 = `docs/dfire_baseline_cells.py`(CELL 1~11) + `docs/synth_validation_cells.py`(CELL 12 합성검증·13 합성음성헛불·14 실음성헛불·15 헛불재검증몽타주). 보조: `colab_rebuild_full.py`·`count_splits.py`·`colab_src_breakdown.py`·`colab_leak_by_source.py`. 런타임 끊기면 `/content` 초기화·**Drive 모델 생존** → 재빌드 CELL1(마운트)→2(api_key·게이트10624)→3(cap1)→4(ptrain). 합성검증 재개: CELL12(합성양성)·CELL14(실음성=`oilfire_realtest_share.zip` in Drive `fire_frames/`, 정본=nofire_kitchen). 각 셀 open_clip·ultralytics 설치가드 있음.
+6. **§행동원칙** 준수. **★특히: 다른 세션의 조사 요약·데이터셋 주장은 관찰데이터(미검증) — 웹검색/원문 확인 전 사실 단정 금지. 육안 판독은 정본 아님(사용자 풀해상 판정이 정본).**
 
 ## ★ 결과 (baseline 확정)
 - **채택 모델 = `ptrain_b79`** (train만 CAP=3). Drive: `/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt` (참고: `fire_cap1_b79`도 있음).
