@@ -140,3 +140,104 @@ if fires:
     print('※ 빨강=모델이 불이라 찍은 곳. 수증기·반사·주황조명 등에 찍혔으면 헛불 원인 확인.')
 else:
     print('  conf≥0.25에서 헛불 0장 — 합성 음성에 오경보 안 냄(좋음).')
+
+# ========== CELL 14: 실제 무화재 급식실 헛불률(B) — base(ptrain_b79)를 oilfire_realtest 실음성에 ==========
+# oilfire_realtest_share.zip(Drive) 안 nofire_kitchen(실 조리 무화재)+nofire_presrc(대조)에 base 돌려 헛불률.
+# 28장 합성 예비치를 실제 데이터로 대체. 전제: CELL 1(Drive) — best.pt·zip 모두 Drive.
+import subprocess, sys, os, glob, zipfile
+try: import ultralytics
+except ImportError:
+    subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+import numpy as np, matplotlib.pyplot as plt, matplotlib.patches as patches
+
+W='/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+assert os.path.exists(W), 'Drive 마운트 필요(CELL 1) — best.pt 없음: '+W
+EXTS=('.jpg','.jpeg','.png','.webp')
+
+# 1) zip 찾기 — 경로 하드코딩 안 함(MyDrive 재귀 검색). 경로 알면 ZIP_OVERRIDE에 직접.
+ZIP_OVERRIDE=''
+if ZIP_OVERRIDE and os.path.exists(ZIP_OVERRIDE):
+    zpath=ZIP_OVERRIDE
+else:
+    print('MyDrive에서 oilfire_realtest_share.zip 검색 중...(수십초 가능)')
+    hits=glob.glob('/content/drive/MyDrive/**/oilfire_realtest_share.zip', recursive=True)
+    assert hits, 'oilfire_realtest_share.zip 못 찾음 — ZIP_OVERRIDE에 경로 지정하거나 파일 위치 확인'
+    zpath=hits[0]
+print('zip:', zpath)
+
+# 2) zip 내부 구조 확인(추출 전) — 추측 안 하고 실제로 봄
+zf=zipfile.ZipFile(zpath)
+names=zf.namelist()
+tops=sorted(set(n.split('/')[0] for n in names if n.strip('/')))
+print(f'zip 항목 {len(names)}개 · 최상위 항목:', tops[:12])
+def zimgs(sub): return [n for n in names if f'{sub}/' in n and n.lower().endswith(EXTS)]
+print(f'  zip 내 nofire_kitchen 이미지 {len(zimgs("nofire_kitchen"))} · nofire_presrc 이미지 {len(zimgs("nofire_presrc"))}')
+
+# 3) 추출
+EXTRACT='/content/oilfire_real'
+if os.path.isdir(EXTRACT) and any(os.scandir(EXTRACT)):
+    print('이미 추출됨 →', EXTRACT)
+else:
+    zf.extractall(EXTRACT); print('추출 완료 →', EXTRACT)
+zf.close()
+
+# 4) 이미지 폴더 탐색 — 이름 매칭 + 전체 나열로 검증(없으면 멈춤, 추측 금지)
+def count_imgs(d): return sorted(os.path.join(d,f) for f in os.listdir(d) if f.lower().endswith(EXTS))
+targets={}; alldirs=[]
+for root,dirs,files in os.walk(EXTRACT):
+    ims=[f for f in files if f.lower().endswith(EXTS)]
+    if ims:
+        alldirs.append((root,len(ims)))
+        b=os.path.basename(root).lower()
+        if b in ('nofire_kitchen','nofire_presrc'): targets[b]=root
+print('\n추출된 이미지 폴더(개수順):')
+for d,n in sorted(alldirs, key=lambda x:-x[1])[:15]:
+    print(f'  {n:5d}  {d.replace(EXTRACT,"").lstrip("/")}')
+assert 'nofire_kitchen' in targets, f'nofire_kitchen 폴더 못 찾음 — 위 목록서 실제 폴더명 확인 후 targets 로직 수정. 발견된 target={list(targets)}'
+
+# 5) base 헛불률 측정
+DREF={0.05:0.081,0.25:0.021,0.50:0.008}   # D-Fire 야외음성(참고)
+SREF={0.05:0.071,0.25:0.036,0.50:0.000}   # 합성28 예비(참고)
+m=YOLO(W)
+def fp_eval(name, d):
+    imgs=count_imgs(d); res=[]
+    for ip in imgs:
+        r=m.predict(ip, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+        if r.boxes is not None and len(r.boxes):
+            res.append((ip, float(r.boxes.conf.max().cpu()), r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()))
+        else:
+            res.append((ip, 0.0, np.zeros((0,4)), np.zeros(0)))
+    tc=np.array([x[1] for x in res]); N=len(res)
+    print(f'\n[{name}] 실제 무화재 {N}장 · 헛불률:')
+    for C in (0.05,0.25,0.50):
+        fp=tc>=C
+        print(f'   conf>={C:.2f}: {fp.mean():.3f} ({int(fp.sum())}/{N})   D-Fire야외 {DREF[C]:.3f} · 합성28 {SREF[C]:.3f}')
+    return res
+
+results={}
+for nm in ('nofire_kitchen','nofire_presrc'):
+    if nm in targets: results[nm]=fp_eval(nm, targets[nm])
+
+# 6) 급식실 실제 헛불 몽타주(conf≥0.25) — 무엇을 불로 오인했나
+C0=0.25
+res=results.get('nofire_kitchen',[])
+fires=sorted([r for r in res if r[1]>=C0], key=lambda x:-x[1])
+print(f'\nnofire_kitchen conf>={C0} 헛불 {len(fires)}장 — 실제로 무엇을 불로 오인했나:')
+if fires:
+    K=min(24,len(fires)); order=fires[:K]
+    cols=min(4,K); rows=(K+cols-1)//cols
+    fig,ax=plt.subplots(rows,cols,figsize=(4*cols,3.4*rows)); ax=np.atleast_2d(ax)
+    for i in range(rows*cols):
+        a=ax[i//cols,i%cols]; a.axis('off')
+        if i>=K: continue
+        ip,tcf,xy,cf=order[i]; im=Image.open(ip).convert('RGB'); a.imshow(im)
+        for (x1,y1,x2,y2),c in zip(xy,cf):
+            if c>=C0: a.add_patch(patches.Rectangle((x1,y1),x2-x1,y2-y1,fill=False,edgecolor='red',linewidth=2))
+        a.set_title(f'top {tcf:.2f} · {os.path.basename(ip)[:16]}',fontsize=7)
+    plt.tight_layout(); plt.show()
+    print('※ 빨강=모델이 불이라 찍은 곳. 실제 수증기·스테인리스 반사·조명에 찍혔으면 헛불 원인 확정.')
+else:
+    print('  conf>=0.25 헛불 0장.')
+print('\n※ 실제 음성 기준 = 합성 28장 예비치 대체. N 커서 신뢰도↑. presrc는 대조(비-급식실).')
