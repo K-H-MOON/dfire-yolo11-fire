@@ -127,6 +127,9 @@ for k,members in enumerate(reps_per):
 open(f'{OUTDIR}/data.yaml','w').write("path: "+OUTDIR+"\ntrain: train/images\nval: valid/images\ntest: test/images\nnc: 1\nnames: ['fire']\n")
 assert bb==ba and sum(stat[s]['pos']+stat[s]['neg'] for s in stat)==len(seen)
 print('[cap1] 총', len(seen), '· train 양성', stat['train']['pos'], '· test', str(stat['test']['pos'])+'/'+str(stat['test']['pos']+stat['test']['neg']))
+for _s in ('train','valid','test'):
+    _p,_n=stat[_s]['pos'],stat[_s]['neg']
+    print(f"   {_s:6} 총 {_p+_n:6d} · 양성 {_p:5d} · 음성 {_n:5d} · {100*(_p+_n)/len(seen):5.1f}%")
 print('가드 통과 OK ·', OUTDIR)
 
 # ==================== CELL 4: per-split -> dfire_ptrain (train CAP=3) ====================
@@ -173,6 +176,10 @@ for k,members in enumerate(clusters):
 open(f'{OUTDIR}/data.yaml','w').write("path: "+OUTDIR+"\ntrain: train/images\nval: valid/images\ntest: test/images\nnc: 1\nnames: ['fire']\n")
 assert bb==ba and sum(stat[s]['pos']+stat[s]['neg'] for s in stat)==len(seen)
 print('[ptrain] 총', len(seen), '· train 양성', stat['train']['pos'], '· test', str(stat['test']['pos'])+'/'+str(stat['test']['pos']+stat['test']['neg']))
+_nc={_s:sum(1 for _k,_v in split_of.items() if _v==_s) for _s in ('train','valid','test')}
+for _s in ('train','valid','test'):
+    _p,_n=stat[_s]['pos'],stat[_s]['neg']
+    print(f"   {_s:6} 총 {_p+_n:6d} · 양성 {_p:5d} · 음성 {_n:5d} · 덩어리 {_nc[_s]:5d} · 덩어리당 {(_p+_n)/max(_nc[_s],1):4.2f}장")
 print('  (③ cap1 과 test 수 동일해야 정상)')
 print('가드 통과 OK ·', OUTDIR)
 
