@@ -1,6 +1,17 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
-**상태(2026-08-28): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) 진행 — 합성 생성기 v2 완성, 현재 *불꽃 소스 서치*(AI-Hub 크롭).** (파이프라인 6단계 = §프로젝트 파이프라인.)
+**상태(2026-08-29): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) 진행 — 스케일·열화 sweep 완료(§step4 sweep). AI-Hub 보류(다운로드 불완전). 다음=합성유발 FP 또는 학습(전이) 단계.** (파이프라인 6단계 = §프로젝트 파이프라인.)
+
+## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)
+**목표 재확인**: (A) *합성*을 base가 잘 인식하게 개선(프록시=frozen-base recall on 합성). (B)전이/실데이터 학습 아님.
+- **소스 결정**: 실사 NIST 스토브탑 corn oil **6종**만 사용(생성형 다양성은 *학습 단계*로 보류 — 지금 섞으면 "크기·화질" 인과에 "가짜불꽃" 교란). 공개 실사 마스킹가능 조리유류불은 ~6-12장이 천장(NIST FCD)·Kitchen Room Fire는 광각(마스킹난)·heptane은 도메인갭+라이선스 → 다 후순위.
+- **★결론(클린 뱅크·N=160·검정력충분)**:
+  1. **깨끗·충분크기(scale≥~0.25) 합성 불꽃 → base recall 0.994(≈1.0)**. base 진짜 블라인드 ≈0.6%(1/160·유일 미스=불꽃이 튀김 식재료에 겹침=색혼동).
+  2. **크기가 유일한 실질 한계**: scale 0.11(작은불) → recall 0.694. base는 작은/초기 불꽃에 약함(운영 리스크).
+  3. **화질은 충분크기서 견고**(JPEG q8·blur σ5·저해상 0.15× 모두 recall≥0.96). **작은 불꽃에서만** JPEG 해로움(scale0.11 q8 → 0.463). blur·downscale은 어디서도 ~평평.
+  4. **★추출/큐레이션 품질이 결정적 레버**: 뱅크에 금속·조각 쓰레기 섞이면 0.994→0.369 폭락. 합성 요건 = **깨끗한 추출 + 충분한 크기**.
+- **★정정(중간 오류 철회)**: 세션 중 "plateau ~0.856·~14% 놓침·base 블라인드 ~4%·얇은 실오라기"는 **전부 추출 아티팩트(largest-CC 조각냄 + Evt2/4/5 비불꽃[가열코일·금속자] 유입)**였음. base 한계 아님. v0의 "recall 1.0 프록시 천장"이 (깨끗+충분크기서) 옳았던 것. **다음 세션은 클린 뱅크(KEEP 6종) 수치만 신뢰.**
+- **방법 교훈**: 진단 중 이벤트범위+필터+마스크 **3개 동시 변경**→교란(recall 폭락 원인 못 가림). 앞으로 **한 변수씩**. (메모리 no-running-ahead-verify-first 반영.)
 
 **▶ 4번 진행 로그·기준 = `docs/PREREGISTER_DFIRE_QC.md`, 셀 = `docs/realneg_qc_cells.py`(CELL 16~22).** 요약:
 - **실배경/실음성 재빌드(누수통제)**: hankookro 조리영상 28개→QC(오토틸팅1 제외)→학교단위 분할 **eval 5교 684장 / synth 8교 798장**(교집합∅). Drive `realneg_frames/{eval,synth}/`.
@@ -13,6 +24,8 @@
 - (참고) AI-Hub는 (A) 루프 *필수 아님*(base-on-합성이라 실데이터 불요) — 불꽃 소스 후보로만. 안 쓰고 NIST/소방청만으로 가도 됨.
 
 ## ▶ AI-Hub 71751 (로컬 전용 · 불꽃 크롭 소스 · 2026-08-28)
+**★보류(2026-08-29): Validation 원천데이터 다운로드 불완전.** 로컬 크롭 스크립트 `scripts/local_aihub_flamecrop.py`(audit/crop/diag·PIL+json·설치불필요·국외반출가드) 완성·검증. audit 실측: device `ct`(조리기구 추정)=실내 압도(ct∧in 78,120)·**FL∧in∧ct=46,440프레임/129클립**·불꽃 categories_id=1·폴백 place=ENB(5,760). 그러나 **VS.zip diag=불완전**: 목록 243,529개 온전하나 실제 이미지 데이터 없음(파일 1.327GB인데 목록상 압축합 108.6GB·header_offset 최대 107GB > 파일크기 → 멀티볼륨의 목록 조각만 받음·프로브 읽기 실패). `01.원천데이터`에 VS.zip 하나뿐(동반 조각 없음). → **완본(≈108GB) 재다운로드 필요·미완.** AI-Hub는 (A)엔 필수 아님(NIST로 진행 중). 재개 시 완본 확보 후 `local_aihub_flamecrop.py crop`(로컬·`--out`은 OneDrive 밖 필수).
+
 - **경로(로컬)**: `C:\Users\jhmoo\Downloads\089.화재 발생 예측 영상_고도화_...\3.개방데이터\1.데이터\{Validation,Training}\{01.원천데이터,02.라벨링데이터}`. Validation: **VS.zip(1.27GB=원본 이미지)·VL.zip(151MB=JSON 243,529·불꽃 76,753)**. Training(TS/TL.zip)·Other/Sublabel zip도 있음. 압축 상태(미해제).
 - **파일명**: `sceneID_FL_place_frame.json`(씬당 360프레임=12초×30fps). place 분포(불꽃): GAH(주택)18720·MS14760·FWW14040·RE9000·OLMF6480·ERBF6120·**ENB(음식점)5760**·VTSP1440.
 - **JSON 스키마**: `image{width,height,filename}` · `attributes{class:FL, inout(in/out), place, device(ct=조리기구?), fire_reason, fire_level, fps, scene, clipname}` · `annotations[{bbox:[4], area, categories_id}]`. → 실내·조리·bbox 필터 다 됨(inout·device는 JSON, place는 파일명에도).
