@@ -639,3 +639,142 @@ for FS in SCALES:
     for kind, vals in DEGRADE.items():
         cells = [f'{v}:{np.mean([detect(m, apply_degrade(comp, kind, v), box)[0] >= 0.25 for comp, box, nm in batch]):.3f}' for v in vals]
         print(f'  [{kind}] ' + ' | '.join(cells) + '   (img@0.25)')
+
+
+# ========== CELL 28: 합성유발 FP — 같은 synth 배경에 불꽃 있음/없음 → base FP 비교 (한 변수=불꽃 유무) ==========
+# 질문: 합성(불꽃 붙이기) 행위가 헛불(FP)을 *유발*하나, 아니면 FP는 배경 자체(주황물체 색혼동)에서 오나?
+# 설계(paired·한 변수): 같은 배경 N장을 (1)맨 배경 (2)깨끗한 불꽃 붙임(scale 0.25) 둘로 → base 검출 비교.
+#   ★ΔFP = (불꽃있을때 '불꽃 아닌 곳' FP) − (맨 배경 FP). ≈0 → 합성 무해 · >0 → 합성이 FP 유발.
+# 클린 뱅크(KEEP 6종)·largest-CC. 프록시(frozen-base). 진행 전제=CELL 27 뱅크.
+import os, glob, subprocess, sys, hashlib
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as patches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W   = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+SRC = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+BG  = '/content/drive/MyDrive/realneg_frames/synth'
+OUT = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SEED = 0; FS = 0.25; N_BG = 300; CONFS = (0.05, 0.25, 0.50)
+KEEP = ['1574198232-Evt3', '1574198232-EvtP', '1574199884-Evt3', '1574199884-EvtP',
+        '1508954077-EvtP', '1508958465-EvtP']
+
+def extract_flame(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None, 0.0
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    m = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad)
+    x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*mm*255]).astype(np.uint8)), float(mm.mean())
+
+def load_flames():
+    out, seen = [], set()
+    for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+        if not any(k in os.path.basename(p) for k in KEEP): continue
+        md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
+        if md5 in seen: continue
+        fl, cov = extract_flame(p)
+        if fl is None or max(fl.size) < 60: continue
+        seen.add(md5); out.append((os.path.basename(p).split('__')[0], fl))
+    return out
+
+def paste(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, W_ = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W_, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, W_), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[..., 3:4]/255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[..., :3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter/ua if ua > 0 else 0.0
+
+def boxes(m, pil):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return np.zeros((0, 4)), np.zeros(0)
+    return r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()
+
+flames = load_flames(); assert flames, '클린 불꽃 0'
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True)); m = YOLO(W)
+rng = np.random.default_rng(SEED)
+sel = [bgs[i] for i in rng.choice(len(bgs), size=min(N_BG, len(bgs)), replace=False)]
+print(f'뱅크 {len(flames)}종 · 배경 {len(sel)}장 (paired: 맨배경 vs 불꽃scale{FS})')
+
+rows = []
+for bp in sel:
+    bg = Image.open(bp).convert('RGB'); Wd, Hd = bg.size
+    xyb, cfb = boxes(m, bg)                                   # (1) 맨 배경
+    nm, fl = flames[int(rng.integers(len(flames)))]
+    th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); fl_r = fl.resize((tw, th))
+    px = int(Wd*rng.uniform(0.15, 0.85) - tw/2); py = int(Hd*rng.uniform(0.35, 0.75) - th/2)
+    comp, gt = paste(bg, fl_r, px, py)                       # (2) 불꽃 붙임
+    xyc, cfc = boxes(m, comp)
+    rows.append((bp, xyb, cfb, comp, gt, xyc, cfc, nm))
+
+print(f'\n=== 합성유발 FP (paired · n={len(rows)}) ===')
+print(f'{"conf":>6}{"맨배경FP":>10}{"불꽃recall":>11}{"불꽃외 FP(합성후)":>17}{"ΔFP(합성유발)":>14}')
+for c in CONFS:
+    bare_fp = np.array([(cfb >= c).any() for (_, xyb, cfb, _, _, _, _, _) in rows])
+    recall, spur = [], []
+    for (_, _, _, comp, gt, xyc, cfc, _) in rows:
+        on = any(cfc[i] >= c and iou(xyc[i], gt) >= 0.3 for i in range(len(cfc))) if gt else False
+        sp = any(cfc[i] >= c and iou(xyc[i], gt) < 0.3 for i in range(len(cfc)))
+        recall.append(on); spur.append(sp)
+    recall = np.array(recall); spur = np.array(spur)
+    dfp = spur.mean() - bare_fp.mean()
+    n = len(rows); se = ((spur.mean()*(1-spur.mean()) + bare_fp.mean()*(1-bare_fp.mean()))/n)**0.5
+    print(f'{c:>6.2f}{bare_fp.mean():>10.3f}{recall.mean():>11.3f}{spur.mean():>17.3f}{dfp:>+11.3f}±{1.96*se:.3f}')
+print('※ ΔFP≈0 → 합성(붙여넣기)이 FP 안 더함·FP는 배경 주황물체서 옴. ΔFP>0 → 합성이 헛불 유발(합성방식 고쳐야).')
+
+# 몽타주: (A) 맨배경 헛불(conf0.25) · (B) 불꽃 붙인 뒤 '불꽃 외' 헛불(conf0.25) → 트리거 육안(주황물체 vs 붙여넣기 아티팩트)
+C0 = 0.25
+bareFP = [(bp, xyb, cfb) for (bp, xyb, cfb, _, _, _, _, _) in rows if (cfb >= C0).any()]
+compFP = [(comp, gt, xyc, cfc, nm) for (_, _, _, comp, gt, xyc, cfc, nm) in rows
+          if any(cfc[i] >= C0 and iou(xyc[i], gt) < 0.3 for i in range(len(cfc)))]
+print(f'\nconf{C0}: 맨배경 헛불 {len(bareFP)}장 · 불꽃외 헛불(합성후) {len(compFP)}장 → 몽타주로 트리거 확인')
+
+def montage(items, drawer, title, path, K=16):
+    if not items: print('  (0장)'); return
+    K = min(K, len(items)); cols = 4; rr = (K+cols-1)//cols
+    fig, ax = plt.subplots(rr, cols, figsize=(4*cols, 3*rr)); ax = np.array(ax).reshape(rr, cols)
+    for i in range(rr*cols):
+        a = ax[i//cols, i%cols]; a.axis('off')
+        if i >= K: continue
+        drawer(a, items[i])
+    fig.suptitle(title, fontsize=12); plt.tight_layout(); plt.savefig(path, dpi=90, bbox_inches='tight'); plt.show(); print('  →', path)
+
+def draw_bare(a, it):
+    bp, xy, cf = it; a.imshow(Image.open(bp).convert('RGB'))
+    for i in range(len(cf)):
+        if cf[i] >= C0: a.add_patch(patches.Rectangle((xy[i][0], xy[i][1]), xy[i][2]-xy[i][0], xy[i][3]-xy[i][1], fill=False, edgecolor='red', lw=2))
+    a.set_title(f'top{cf.max():.2f}', fontsize=8)
+
+def draw_comp(a, it):
+    comp, gt, xy, cf, nm = it; a.imshow(comp)
+    if gt: a.add_patch(patches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.5))  # 진짜 불꽃(초록)
+    for i in range(len(cf)):
+        if cf[i] >= C0 and iou(xy[i], gt) < 0.3: a.add_patch(patches.Rectangle((xy[i][0], xy[i][1]), xy[i][2]-xy[i][0], xy[i][3]-xy[i][1], fill=False, edgecolor='red', lw=2))  # 불꽃외 헛불(빨강)
+    a.set_title(f'{nm[:10]}', fontsize=8)
+
+montage(bareFP, draw_bare, f'맨배경 헛불 (conf{C0}) — 무엇에 오탐? (주황물체 색혼동?)', f'{OUT}/fp_bare.png')
+montage(compFP, draw_comp, f'불꽃 붙인 뒤 불꽃외 헛불 (conf{C0}·초록=진짜불꽃·빨강=헛불) — 배경물체? 붙여넣기?', f'{OUT}/fp_synth_induced.png')
