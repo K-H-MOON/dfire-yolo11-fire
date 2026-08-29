@@ -171,8 +171,8 @@ hankookro 공유 `조리 데이터 영상`(급식실 실조리 영상)에서 **�
 - **콘텐츠 ✅**: 실내/실외·**음식점(ENB)/주택(GAH)**·전기레인지(er)·불꽃(FL)40%·연기40%·정상20%·1080p·238만장. 실 실내조리 화재=recall(B) 후보.
 - **상업 ✅**: 개발 모델 상업 판매·활용 가능(출처표시)·데이터셋 재판매만 별도협의.
 - **접근 ⚠️**: 내국인만 신청 가능(사용자 내국인 → OK).
-- **★국외반출 ❌ (블로커)**: "다운로드 원본(json/jpg)은 외부(국내·국외) 유출 불가"(논문 이미지 삽입만 예외). → **Colab/Google Drive(해외)에 원본 업로드 = 위반 소지.** **AI-Hub는 로컬(국내) 처리만.**
-- **결론**: 콘텐츠·상업·접근 통과, **국외반출 때문에 Colab 워크플로 불가 → 로컬(국내)서 홀드아웃·finetune.** 합성 pretrain은 Colab(무관), 모델만 이동. 출처 = [AI-Hub 71751](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71751)·[이용정책](https://www.aihub.or.kr/intrcn/guid/usagepolicy.do?currMenu=151&topMenu=105).
+- **★국외반출 — 원문상 금지이나 사용자 승인으로 완화(2026-08-29)**: 원 약관="다운로드 원본 외부 유출 불가". **라이선스 주체(사용자)가 이 프로젝트 한정 승인: "불꽃 셋 추출·비배포·비상업·결과물 출처표기" 조건서 Colab/Drive 사용 OK.** → **AI-Hub 크롭/subset을 Drive 업로드·Colab GPU 처리 가능**(전이학습도). **★단 데이터셋 원본/파생 제3자 공유·재배포는 여전히 금지.** Claude/AI는 AI-Hub 이미지를 context로 안 읽음(제3자 전송 최소화).
+- **결론(갱신)**: 콘텐츠·상업·접근 통과 + **Colab 워크플로 가능해짐(사용자 승인).** 용량전략=108GB 통짜 대신 로컬서 조리불꽃 선택추출(수GB)→Drive→Colab. 출처 = [AI-Hub 71751](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71751)·[이용정책](https://www.aihub.or.kr/intrcn/guid/usagepolicy.do?currMenu=151&topMenu=105).
 
 ## 전이 측정 프로토콜 (사전등록 · 실 양성 확보 후 로컬 실행 · anti-fitting)
 목적: 합성(v0/v1)이 실제 실내 화재 검출에 유용한가 측정 = 파이프라인 4→(B) 닫기.
@@ -185,9 +185,9 @@ hankookro 공유 `조리 데이터 영상`(급식실 실조리 영상)에서 **�
   4. **synth-pretrain → real-finetune**(보고서 주장 가설)
   5. mixed(합성+real) — 대조
 - **지표**: 홀드아웃 recall/precision/mAP50 + 무화재 FP. **판정**: 4 > 2·3·5 면 "합성 pretrain 유용" 확정 · 4≈3 면 합성 무기여.
-- **불꽃 소스(Colab 합성용)**: NIST 옥수수유 8장(CELL 20b·PD) + 소방청(라이선스시). **AI-Hub 불은 Colab 합성에 못 씀(국외반출)** — 로컬 finetune 실양성으로만.
+- **불꽃 소스(Colab 합성용)**: NIST 옥수수유(PD) + **AI-Hub 조리불꽃(2026-08-29 사용자 승인으로 Colab 사용 가능)** + 소방청(라이선스시).
 - **도메인 갭 명시**: AI-Hub 음식점/주택 ≠ 급식실 로봇조리 → 근접 실내이지 완전 정본 아님. 최종 급식실 정본은 통제연소/실촬.
-- **인프라**: 합성 pretrain=Colab · AI-Hub finetune·평가=로컬(국내) · 모델만 이동.
+- **인프라(갱신 2026-08-29)**: 사용자 승인으로 **AI-Hub도 Colab GPU 가능** → 합성 pretrain + AI-Hub finetune·평가 모두 Colab. (조리불꽃 subset만 Drive 업로드.) 단 데이터셋 재배포 금지 유지.
 
 ## (A) step4 스케일·열화 sweep (2026-08-29 · 셀 `docs/synth_sweep_cells.py` CELL 20c·24·25·26)
 "어떻게 합성해야 base가 인식하나"를 판별력 있게. **통제변수 = 불꽃 크기·화질**(불꽃정체·배경·위치는 다양화). base=frozen ptrain_b79. 프록시=base-on-합성 recall.

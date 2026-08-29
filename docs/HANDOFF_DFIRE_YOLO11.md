@@ -20,17 +20,21 @@
 - **(A) 합성 v0**: 불소스=NIST Stovetop 옥수수유 스냅샷(ignition·peak 2장, Drive `firecrop_src/`) → synth 배경에 copy-paste 합성(`synth_composite_v0/`) → **base recall 1.0@all conf(프록시 천장·판별력 없음)**. 배관 확인까지.
 - **★★파이프라인 재확인(2026-08-28 후반·중요): 목표=(A) base가 *합성*을 잘 인식(recall/precision)하게 *합성을 개선*(=step3·4·5·6). (B)전이/실데이터학습 아님** — Claude가 외부보고서 (B)프레이밍으로 두 번 오독, 사용자 정정. 외부보고서 (B)조언(pretrain→ft·실홀드아웃 학습)은 **범위 밖**, 리얼리즘 조언(컴포지팅·오일불)만 유효. **스필/페더=저ROI 접음**(밝은 스테인리스서 screen 무효, 크랭크1.5도 육안 무차). **v2 생성기(CELL 23b·클린불꽃6×스케일0.15~0.40·위치 다양·SEED)=완성**(`synth_composite_v2/`).
 - **현재=step4 불꽃 소스 서치.** 확보: **NIST 옥수수유 6장**(Colab-safe·PD·`firecrop_src/nist_stovetop_cornoil/`·품질필터 md5/면적0.30/60px로 10→6). 후보: 소방청(공누리 미검증)·**AI-Hub 71751(=불꽃 *크롭 소스*·학습데이터 아님).**
-- **★★AI-Hub 컴플라이언스(엄수)**: 국외반출=**외부(국내·국외) 유출 불가** → AI-Hub 원본·크롭·그걸 쓴 합성·base평가 **전부 로컬(이 PC·CPU)만**. **Claude는 AI-Hub 이미지/크롭 Read 금지(해외전송=위반)** → 육안검수=사용자 로컬·정본. Colab엔 AI-Hub 파생 금지(우리 synth배경·best.pt는 로컬 반입 OK).
+- **★★AI-Hub 취급(2026-08-29 사용자=라이선스주체 승인으로 변경)**: 원 라이선스=국외반출 금지이나, 사용자가 **이 프로젝트 한정 승인**: "불꽃 셋 추출 목적·비배포·비상업·**결과물 출처표기**" 조건서 **Colab/Drive 사용 OK**. → **AI-Hub 원본/크롭을 Drive 업로드·Colab GPU 처리 가능**(전이 학습도 이제 가능). **★단 데이터셋 원본/파생의 제3자 공유·재배포는 여전히 금지.** 출처표기="AI-Hub 71751 화재 발생 예측 영상". **Claude/AI는 AI-Hub 이미지를 context로 안 읽음**(제3자 전송 최소화)—육안검수=사용자. (이전 "로컬 전용" 하드룰 폐기.)
 - **▶다음 스텝(사용자 결정): AI-Hub `inout:in`+`device:ct`(조리기구) 불꽃 크롭 → 부족하면 `place:ENB`(음식점) 실내로 넓힘.** 로컬 크롭 스크립트(PIL+json·ultralytics 불필요)부터 · **device 코드 분포 먼저 확인**(ct=조리기구 추정·미검증). 크롭→마스킹(AI-Hub 배경 다양=NIST보다 어려울 수)→로컬 합성→base 로컬 추론(CPU). 상세=§AI-Hub.
 - (참고) AI-Hub는 (A) 루프 *필수 아님*(base-on-합성이라 실데이터 불요) — 불꽃 소스 후보로만. 안 쓰고 NIST/소방청만으로 가도 됨.
 
-## ▶ AI-Hub 71751 (로컬 전용 · 불꽃 크롭 소스 · 2026-08-28)
-**★보류(2026-08-29): Validation 원천데이터 다운로드 불완전.** 로컬 크롭 스크립트 `scripts/local_aihub_flamecrop.py`(audit/crop/diag·PIL+json·설치불필요·국외반출가드) 완성·검증. audit 실측: device `ct`(조리기구 추정)=실내 압도(ct∧in 78,120)·**FL∧in∧ct=46,440프레임/129클립**·불꽃 categories_id=1·폴백 place=ENB(5,760). 그러나 **VS.zip diag=불완전**: 목록 243,529개 온전하나 실제 이미지 데이터 없음(파일 1.327GB인데 목록상 압축합 108.6GB·header_offset 최대 107GB > 파일크기 → 멀티볼륨의 목록 조각만 받음·프로브 읽기 실패). `01.원천데이터`에 VS.zip 하나뿐(동반 조각 없음). → **완본(≈108GB) 재다운로드 필요·미완.** AI-Hub는 (A)엔 필수 아님(NIST로 진행 중). 재개 시 완본 확보 후 `local_aihub_flamecrop.py crop`(로컬·`--out`은 OneDrive 밖 필수).
+## ▶ AI-Hub 71751 (불꽃 크롭 소스 · Colab OK[사용자승인] · 2026-08-29)
+**★진행중(2026-08-29): VS.z01(100GB) 다운로드 중.** 스크립트 `scripts/local_aihub_flamecrop.py`(audit/crop/diag/**filelist**·PIL+json) 완성·검증(전체 zip구조 + **샘플 구조[01/02 직속·Validation없음] 둘 다 지원**·enumerate_splits). audit 실측(VL.zip 라벨): FL∧in∧ct=**46,440프레임/129클립**·불꽃 categories_id=1·폴백 place=ENB(5,760).
+- **★VS 멀티볼륨 판명**: `Validation/01.원천데이터` = **VS.z01(100GB=이미지 데이터)** + **VS.zip(1GB=목록/카탈로그 조각)**. 이전 "VS.zip diag 불완전(목록 243,529 온전하나 데이터 없음)"의 정체 = **VS.zip[마지막 조각]만 받고 VS.z01[데이터 조각]을 안 받음.** → **VS.z01만 추가로 받으면 완성**(둘을 같은 폴더에 두고 7-Zip 결합).
+- **★취급 변경**: 사용자 승인으로 **Colab/Drive OK**(불꽃추출·비배포·출처표기). 로컬 CPU 학습 비현실 → **Colab GPU로 전이학습 가능해짐.**
+- **★용량 전략**: 108GB 통짜 업로드 비현실 → **로컬서 조리불꽃만 선택추출**(`crop --filelist-only` 로 `cook_flame_files.txt` 생성 → 7-Zip `-r @목록` 로 수 GB만 풀기) → 그 subset만 Drive 업로드. (단 전체 100GB 내부구조는 다운 완료 후 파악해 subset vs 전체 결정.)
+- 샘플(1180장)은 실외 1클립(FWW·device none)뿐이라 조리불꽃 0 — 툴·스키마 실검증용으로만 소용(완본이 정본).
 
 - **경로(로컬)**: `C:\Users\jhmoo\Downloads\089.화재 발생 예측 영상_고도화_...\3.개방데이터\1.데이터\{Validation,Training}\{01.원천데이터,02.라벨링데이터}`. Validation: **VS.zip(1.27GB=원본 이미지)·VL.zip(151MB=JSON 243,529·불꽃 76,753)**. Training(TS/TL.zip)·Other/Sublabel zip도 있음. 압축 상태(미해제).
 - **파일명**: `sceneID_FL_place_frame.json`(씬당 360프레임=12초×30fps). place 분포(불꽃): GAH(주택)18720·MS14760·FWW14040·RE9000·OLMF6480·ERBF6120·**ENB(음식점)5760**·VTSP1440.
 - **JSON 스키마**: `image{width,height,filename}` · `attributes{class:FL, inout(in/out), place, device(ct=조리기구?), fire_reason, fire_level, fps, scene, clipname}` · `annotations[{bbox:[4], area, categories_id}]`. → 실내·조리·bbox 필터 다 됨(inout·device는 JSON, place는 파일명에도).
-- **라이선스**: 모델 상업화 OK(출처표시)·데이터셋 재판매만 별도협의·내국인만 신청·**★국외반출 금지→로컬 전용**. 출처 [AI-Hub 71751](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71751).
+- **라이선스**: 모델 상업화 OK(출처표시)·데이터셋 재판매만 별도협의·내국인만 신청·원문상 국외반출 금지. **★2026-08-29 사용자(라이선스주체) 승인으로 이 프로젝트 한정 Colab/Drive 사용 OK(불꽃추출·비배포·비상업·출처표기).** 단 데이터셋 원본/파생 제3자 공유·재배포 금지 유지. 출처 [AI-Hub 71751](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71751).
 - **로컬 환경(2026-08-28 점검)**: `python`=3.10.11(권장)·`py`=3.13.9 · **ultralytics/torch 없음** · **GPU 없음(Intel Iris Xe·CPU only)**. → 크롭은 설치 불필요(PIL+json) · base 추론은 `pip install ultralytics`(CPU) 필요 · 학습은 CPU라 비현실(하지만 (A)엔 학습 불요).
 
 ## ▶▶▶ 다음 세션 재개 레시피

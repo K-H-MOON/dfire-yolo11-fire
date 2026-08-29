@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =====================================================================================
-#  LOCAL-ONLY · AI-Hub 71751 불꽃 크롭 소스 추출 · 파이프라인 step4 (합성 불꽃 소스 서치)
+#  AI-Hub 71751 불꽃 크롭 소스 추출 · 파이프라인 step4 (합성 불꽃 소스 서치)
 # =====================================================================================
-#  ★★★ 국외반출 금지 (엄수) ★★★
-#  - AI-Hub 데이터는 "다운로드 원본(json/jpg)의 외부(국내·국외) 유출 불가".
-#  - 따라서 이 스크립트·입력(zip)·출력(크롭/manifest/몽타주)은 전부 이 PC(로컬·국내)에서만.
-#  - Colab / Google Drive / 그 밖의 클라우드에 AI-Hub 원본·크롭·파생물 업로드 금지.
-#  - 육안 검수는 사용자가 로컬 풀해상으로 수행(정본). 이 스크립트는 파일만 생성.
-#  - (Claude/AI 어시스턴트는 이 출력물을 열람하지 않음 = 해외 전송 방지.)
+#  ★★★ 데이터 취급 (라이선스 주체=사용자 승인 · 2026-08-29) ★★★
+#  - 원 라이선스=국외반출 금지이나, 사용자가 이 프로젝트 한정 승인:
+#    "불꽃 셋 추출 목적 · 비배포 · 비상업 · 결과물 출처표기" 조건으로 Colab/Drive 사용 OK.
+#  - ★단 데이터셋 원본/파생의 제3자 공유·재배포는 여전히 금지(라이선스 명시).
+#  - 출처표기: 결과물/모델에 "AI-Hub 71751 화재 발생 예측 영상" 명기.
+#  - Claude/AI는 AI-Hub 이미지를 context로 읽지 않음(제3자 전송 최소화) — 육안 검수=사용자.
 #
 #  환경(2026-08-28 점검): Python 3.10.11 · Pillow 12.3.0 · GPU 없음(CPU).
 #    - audit 모드: 표준 라이브러리만(zipfile/json) — 설치 불필요.
@@ -639,7 +639,7 @@ def run_crop(args):
     out_dir = os.path.abspath(args.out)
     crop_dir = os.path.join(out_dir, 'crops')
     os.makedirs(crop_dir, exist_ok=True)
-    print(f'[out] {out_dir}   (★로컬 전용 — 클라우드 업로드 금지)')
+    print(f'[out] {out_dir}   (불꽃추출·비배포·출처표기 조건 · 데이터셋 재배포 금지)')
 
     splits = enumerate_splits(root, args.split)
     if not splits:
@@ -703,6 +703,20 @@ def run_crop(args):
         picked = [picked[int(i * step)] for i in range(args.total_cap)]
     print(f'[subsample] per-scene-cap {args.per_scene_cap} · total-cap {args.total_cap} '
           f'→ {len(picked)} 프레임 추출 대상')
+
+    # 2b) --filelist-only: 이미지 추출 대신 대상 파일명 목록만(7-Zip 선택추출용) → VS 100GB 다 안 풀어도 됨
+    if getattr(args, 'filelist_only', False):
+        out_dir = os.path.abspath(args.out); os.makedirs(out_dir, exist_ok=True)
+        lst = os.path.join(out_dir, 'cook_flame_files.txt')
+        with open(lst, 'w', encoding='utf-8') as f:
+            for m in picked:
+                fn = os.path.basename(m['img_file'] or (os.path.splitext(m['name'])[0] + '.jpg'))
+                f.write('*' + fn + '\n')                 # 7-Zip 와일드카드(폴더 무관 매칭)
+        print(f'\n[filelist] 조리불꽃 대상 {len(picked)} 파일명 → {lst}')
+        print( '  ★7-Zip 선택추출(VS.z01·VS.zip 같은 폴더에 둔 뒤):')
+        print(f'    7z x "<...>\\Validation\\01.원천데이터\\VS.zip" -o"{out_dir}\\imgs" -r @"{lst}"')
+        print( '    (전체 108GB 대신 이 파일들만 풀림. 풀린 뒤 crop 모드를 그 폴더에 --root 로 실행.)')
+        return
 
     # 3) 이미지 소스 인덱스
     manifest = []
@@ -821,7 +835,7 @@ def run_crop(args):
         print('  해결: 모든 조각이 있으면 7-Zip 으로 VS.zip 우클릭→"압축 풀기"(조각 자동결합) → '
               '풀린 jpg 폴더 생기면 같은 명령 재실행(스크립트가 폴더 자동 인식).')
         print('  조각이 VS.zip 하나뿐이면 다운로드가 불완전 → AI-Hub 재다운로드(전 조각) 필요.')
-    print('  ★국외반출 금지: 이 폴더를 Colab/Drive 등 해외로 올리지 마세요. 마스킹·합성도 로컬.')
+    print('  ★취급: 불꽃추출·비배포·출처표기 조건서 Colab/Drive OK(사용자 승인) · 데이터셋 재배포/공유 금지.')
     print('  다음(로컬): 이 크롭들을 육안 선별 → 마스킹(불꽃 알파) → 합성 → base 추론(로컬 CPU).')
 
 
@@ -898,7 +912,7 @@ def run_diag(args):
 
 def build_parser():
     p = argparse.ArgumentParser(
-        description='AI-Hub 71751 불꽃 크롭 소스 추출 (LOCAL-ONLY · 국외반출 금지)')
+        description='AI-Hub 71751 불꽃 크롭 소스 추출 (불꽃추출·비배포·출처표기 조건서 Colab OK·사용자승인)')
     p.add_argument('--root', default='',
                    help="AI-Hub '1.데이터' 루트(미지정시 Downloads 자동탐색)")
     p.add_argument('--split', default='Validation',
@@ -930,13 +944,15 @@ def build_parser():
     pc.add_argument('--montage-n', type=int, default=64, help='몽타주 썸네일 수(로컬 육안)')
     pc.add_argument('--out', default='aihub_flamecrops',
                     help='출력 폴더(로컬 · 기본 ./aihub_flamecrops)')
+    pc.add_argument('--filelist-only', action='store_true',
+                    help='이미지 추출 대신 대상 파일명 목록(cook_flame_files.txt·7-Zip 선택추출용)만 출력 — VS 100GB 다 안 풀어도 됨')
     return p
 
 
 def main():
     args = build_parser().parse_args()
     print('=' * 78)
-    print(' AI-Hub 71751 flame-crop (LOCAL-ONLY · 국외반출 금지 · 출력을 해외로 올리지 마세요)')
+    print(' AI-Hub 71751 flame-crop (불꽃추출·비배포·출처표기 조건서 Colab OK·사용자승인 2026-08-29 · 데이터셋 재배포 금지)')
     print('=' * 78)
     if args.mode == 'audit':
         run_audit(args)
