@@ -162,6 +162,27 @@ def split_dir(root, split):
     return None
 
 
+def _has_data_subdirs(d):
+    """Validation/Training 없이 01.원천데이터/02.라벨링데이터가 바로 있는 샘플 구조 감지."""
+    if not os.path.isdir(d):
+        return False
+    for s in os.listdir(d):
+        n = NFC(s)
+        if s.startswith('01') or s.startswith('02') or '원천' in n or '라벨' in n:
+            return True
+    return False
+
+
+def enumerate_splits(root, arg_split):
+    """(label, path) 목록. Validation/Training 있으면 그것들, 없으면(샘플) root 자체를 단일 split."""
+    want = ['Validation', 'Training'] if arg_split == 'both' else [arg_split.capitalize()]
+    out = [(name, split_dir(root, name)) for name in want]
+    out = [(n, p) for n, p in out if p is not None]
+    if not out and _has_data_subdirs(root):
+        out = [('(sample)', root)]      # 샘플: root 자체가 데이터 폴더(01/02 직속·Validation 없음)
+    return out
+
+
 def _find_zip_or_dir(split_path, kind):
     """kind='label'(02.라벨링데이터) | 'image'(01.원천데이터).
     반환: ('dir', 경로) 느슨한 json/jpg 폴더 · ('zip', [zip경로...]) · None.
@@ -454,7 +475,9 @@ def resolve_bbox(bbox, area, iw, ih, fmt='auto'):
 def run_audit(args):
     root = find_data_root(args.root)
     print(f'[root] {root}')
-    splits = ['Validation', 'Training'] if args.split == 'both' else [args.split.capitalize()]
+    splits = enumerate_splits(root, args.split)
+    if not splits:
+        sys.exit('[ERR] Validation/Training 도, 01원천·02라벨 폴더도 못 찾음: ' + root)
 
     grand = defaultdict(Counter)         # field -> Counter(value)
     cross_dev_inout = Counter()          # (device, inout)
@@ -468,11 +491,7 @@ def run_audit(args):
     schema_dumped = 0
     attr_key_seen = Counter()
 
-    for split in splits:
-        sp = split_dir(root, split)
-        if sp is None:
-            print(f'[skip] {split} 폴더 없음')
-            continue
+    for split, sp in splits:
         src = _find_zip_or_dir(sp, 'label')
         if src is None:
             print(f'[skip] {split} 라벨(json) 소스 없음')
@@ -622,7 +641,9 @@ def run_crop(args):
     os.makedirs(crop_dir, exist_ok=True)
     print(f'[out] {out_dir}   (★로컬 전용 — 클라우드 업로드 금지)')
 
-    splits = ['Validation', 'Training'] if args.split == 'both' else [args.split.capitalize()]
+    splits = enumerate_splits(root, args.split)
+    if not splits:
+        sys.exit('[ERR] Validation/Training 도, 01원천·02라벨 폴더도 못 찾음: ' + root)
     flame_cat_ids = set(norm(x) for x in args.flame_cat_id.split(',')) if args.flame_cat_id else None
 
     # 1) 라벨 스캔 → 매칭 레코드 수집 (이미지 아직 안 열음)
@@ -630,10 +651,7 @@ def run_crop(args):
     matched = []   # dict(meta 축약 + bbox 목록은 crop 시 재해석)
     per_scene = defaultdict(list)
     n_scanned = 0
-    for split in splits:
-        sp = split_dir(root, split)
-        if sp is None:
-            print(f'[skip] {split} 폴더 없음'); continue
+    for split, sp in splits:
         src = _find_zip_or_dir(sp, 'label')
         if src is None:
             print(f'[skip] {split} 라벨 소스 없음'); continue
@@ -695,11 +713,10 @@ def run_crop(args):
     n_read_err = 0
     dup_md5 = set()
 
-    for split in splits:
+    for split, sp in splits:
         recs = [m for m in picked if m['_split'] == split]
         if not recs:
             continue
-        sp = split_dir(root, split)
         isrc = _find_zip_or_dir(sp, 'image')
         if isrc is None:
             print(f'[skip] {split} 이미지 소스 없음 — 크롭 불가'); continue
@@ -829,11 +846,10 @@ def run_diag(args):
     """이미지 zip 무결성 진단 — 데이터가 파일 안에 실제로 있는지(오프셋·용량) 판정."""
     root = find_data_root(args.root)
     print(f'[root] {root}')
-    splits = ['Validation', 'Training'] if args.split == 'both' else [args.split.capitalize()]
-    for split in splits:
-        sp = split_dir(root, split)
-        if sp is None:
-            print(f'[skip] {split} 폴더 없음'); continue
+    splits = enumerate_splits(root, args.split)
+    if not splits:
+        sys.exit('[ERR] Validation/Training 도, 01원천·02라벨 폴더도 못 찾음: ' + root)
+    for split, sp in splits:
         isrc = _find_zip_or_dir(sp, 'image')
         if isrc is None:
             print(f'[skip] {split} 이미지 소스 없음'); continue
