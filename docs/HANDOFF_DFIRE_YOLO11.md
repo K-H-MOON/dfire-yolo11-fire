@@ -1,14 +1,31 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
-## ▶▶▶▶ 재개(2026-08-30) — 지금 할 일 = CELL 32 실행
-**한 줄 상태**: 불꽃 합성 *방법론* ablation 실험 진행 중. GATE 통과·VFX뱅크(26장면)·NIST뱅크(2장면)·배경마킹(18) 다 완료. **`docs/synth_sweep_cells.py` CELL 32(본실험 ablation) 작성완료·미실행.**
-1. **다음 액션 = 사용자가 Colab에서 CELL 32 실행** → 표(src×scale×level: recall/tp_conf/synth_FP) 붙이면 → 분석.
-2. **읽을 것**: `over_ctx` vs `screen_ctx`(screen washout 다배경 확정) · `over_rand` vs `over_ctx`(★발견2=밝은 조리면 배치가 base엔 더 어렵다=도메인갭·다배경 확정) · 스필(additive) · scale64/128/256 · VFX vs NIST(경향).
-3. **설계 근거**: `docs/SYNTH_METHOD_EVIDENCE.md`. **핵심 사실**: base 블렌딩=over(screen 기각·bright washout). 장면단위 집계. VFX=CC0 검은배경 luma-key. NIST=조리유 앵커 n=2.
-4. **콜드 재연결**: Drive 데이터(vfx_bank·nist_bank·placement.json·base) 생존 → CELL 32 하나만 실행(자립형). 상세=아래 ▶▶▶ 2026-08-30 최신.
-5. **주의**: [[no-premature-conclusions]]·[[no-running-ahead-verify-first]] — 측정 전 예단 금지·한 변수씩·애매하면 원본 확대 검증(내 실수를 이렇게 잡음).
+## ▶▶▶▶ 재개(2026-08-31) — step4 방법론 ablation **종결**. 다음 = 사용자 선택(발표지 / (B)학습 / 조기검출)
+**한 줄 상태**: 불꽃 합성 *방법론* ablation **완주·검출레벨(rec@.1) 재검증·miss 육안까지 완료**(CELL 32~38, Drive 생존). **미규명 전부 해소.** 결론=아래 §ablation 최종결론. 다음 갈래=발표지 배포 / (B) 학습·실데이터 / 조기(소형)검출 프런티어.
 
-**상태(2026-08-29): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) — 스케일·열화 sweep + 합성유발 FP 완료(§step4 sweep) = step4 사실상 종결. AI-Hub 보류(다운로드 불완전). 남은 프런티어=실 양성 데이터 확보(막힌 (b)/배포).** (파이프라인 6단계 = §프로젝트 파이프라인.)
+### ★ ablation 최종결론 (frozen ptrain_b79 · VFX26+NIST4[peak2+ign2] × 18배경 × scale64/128/256 · 장면집계)
+1. **블렌드 over ≫ screen** (established·VFX n=26·전 스케일·전 GT임계·rec@.1 검출레벨서도 유지). screen=밝은면서 불꽃 픽셀을 흰색으로 지움=진짜 검출손실. → **base 블렌딩=over 확정.**
+2. **배치 over_ctx ≈ over_rand** (★발견2 강한형 **기각**·established). 조리면 배치가 recall 안 깎음. (약점: 주방 랜덤도 밝은면 앉음 → "grounded-조리면 ≈ random-주방위치"까지만.)
+3. **스필: (A)@IoU0.5 드롭**(recall ROI 없음 + synFP 25/26↑) · **단 rec@.1선 소형검출 도움**(VFX@64 +0.135·NIST@64 +0.305·글로우가 검출시키나 박스 번져 IoU↓) → **(B) 소형불 대응 후보**(완전배제 아님).
+4. **★scale 지배·두 체제**: **@64=검출병목**(gap≈0·IoU 낮춰도 안 잡힘=진짜 못봄) / **@256=위치병목**(검출 rec@.1 0.835·IoU0.5가 절반 깎음). 128 전이.
+5. **⑤ source realism(real oil>movie) 기각**: VFX 저평균=이질성(4전멸+6우수·top 0.94>NIST peak 0.861)+성긴GT지 리얼리즘 아님.
+6. **큐레이션 비(非)레버**: dead-4도 검출됨(rec@.1↑)→cov 컬=지표 게이밍(A). (B)선 어려운소스=정보량↑→컬 역효과. (순환 경계.)
+7. **성김(cov) 메커니즘 3중 확인**: 소스간(NIST 조밀 gap≈0 vs VFX 0.37)·소스내(cov-Δ corr −0.63@256/−0.52@128/@64 −0.05[gap無])·GT반응(VFX만 회복·NIST 0/−). **r²≈0.40=중간세기·유일원인 아님**(⑥종횡비 잔여).
+8. **대형 저recall @IoU0.5 분해**: ~**1/3 GT컨벤션**(alpha>0.1 wispy 헐렁·GT@0.5로 회복 +0.117·성김특이) + ~**2/3 under-box**(base가 밝은 코어만·**det⊂GT·det/GT=IoU=0.18~0.30 실증**). GT@0.5로도 1/3만 회복=det이 alpha0.5 코어보다 작음.
+9. **★★통합 = base는 불꽃 "밝은 코어"에 반응**: @64 코어 작아 발화실패 · @256 코어만 박싱(under-box). 두 증상 **한 뿌리**. **합성법 개선불가 = base/Phase B 영역.**
+10. **0a_hard "조잡>사실" 철회**: rec@.5 0a승(0.504>0.464)→rec@.1 역전(0.799<0.835)=박스정합 아티팩트. ("realism 무익"은 배치·스필 null로 여전히 성립.)
+
+**정밀화(리뷰)**: (a) @64 대비=**판정유보**(n_hit 28 약함)·근거는 육안(어두운 bgL 85/95/111도 det 0.00=밝기 무관 소형불 미발화). (b) under-box **양면성**="base 학습컨벤션 ↔ 우리 GT(alpha>0.1) 정의 불일치"(**D-Fire 박싱관행 미확인**=Phase B 열쇠: base 고칠지 GT 맞출지). (c) 운영=**"대형 검출 확보·조기(소형) 경보 미확보"**(@64 rec@.1 0.173·경보 핵심가치=조기검출).
+
+**한 줄**: 합성 *방법*(over 제외)은 미미한 레버 · over(washout 회피)+scale이 큰 축 · base=밝은코어 반응(소형 발화실패·대형 under-box) · **진짜 큰 레버(GAN 생성·학습)+조기검출은 미탐 프런티어.** (A) 프레임 전체 — (B) 실전유용은 별개.
+
+**스코프 한계**: 컴포지팅 knobs만(aug/noise·GAN/diffusion 미측정)·소스 다양성 미조작·(A)프리즈 프록시·NIST n=2(경향)·ign/peak 비독립·D-Fire 박싱관행 미확인·⑥ 종횡비 교락(under-box 잔여에 섞임).
+
+**셀**: `docs/synth_sweep_cells.py` — CELL 32(본실험)·32-nist(NIST뱅크 ign rescue+패딩/anchor 교정)·33(장면분포)·34(소스품질/miss)·37(GT임계 스윕)·36(검출vs위치 rec@.1+cov-Δ)·38(miss 육안). 전부 자립형. (파일 셀순서 34→37→36→38 흐트러짐·자립형이라 실행 무관·CELL35 폐기.)
+
+**★방법 교훈(이 실험서 반복)**: Claude가 여러 번 과대판정 → 리뷰가 정정: 스필"해롭다"(→n=2 NIST에 끌림)·큐레이션"레버"(→관찰↔처방 혼동·순환)·"대부분 GT아티팩트"(→rec@.1이 GT+underbox 합침)·under-box"느슨"(→실은 코어만 작게). **rec@.1/GT분해/cov-Δ/육안이 매번 잡음.** [[no-premature-conclusions]]·[[no-running-ahead-verify-first]] 강화.
+
+**상태(2026-08-29→08-31): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) — step4 sweep + ablation 완주 = 종결. 남은 프런티어=(B)실 양성데이터·조기(소형)검출.** (파이프라인 = §프로젝트 파이프라인.)
 
 ## ▶▶▶ 2026-08-30 최신 — 불꽃 합성 방법론 ablation 설계 확정 (VFX-pivot)
 **목표=여전히 (A)**: frozen YOLO11s(ptrain_b79)가 *합성*을 얼마나 인식하나(recall/precision/confidence). 학습(B) 아님.
@@ -41,7 +58,7 @@
   - **설계 확정**: base 블렌딩=**over**(screen=문서화된 기각방법·bg00). 계단 over_rand→over_ctx→over_ctx_spill + over_ctx/screen_ctx 다배경 비교. 18배경·scale64/128/256·장면집계.
   - **NIST 매트 뱅크 완성(2026-08-30)**: `nist_bank` 8매트·4이벤트 → **쓸만한 2장면**(alumipan2·calphalon peak·256px가능). ign(50~57px)=64px에도 업스케일→제외. massloss=금속리그+수평화염→제외. NIST 유효=2장면(조리유 앵커·경향만).
   - **★본실험 셀 = `synth_sweep_cells.py` CELL 32 작성완료(커밋 407ceed)·미실행**: over base + 수정4(additive스필·0-c FP·다중시드·NIST파일뱅크) · 조건0a_hard + 계단 over_rand→over_ctx→over_ctx_spill + screen_ctx · SCALE64/128/256×SOURCE(VFX26/NIST2)×18배경 · 장면집계 · recall/tp_conf/synth_FP. 런타임 ~5-10분.
-  - **★★현 위치 = CELL 32 실행 대기(사용자가 Colab서 실행 → 표 보고 → 분석).** 읽을것: over_ctx vs screen_ctx(washout 다배경 확정)·over_rand vs over_ctx(발견2 확정)·스필·scale·VFX vs NIST.
+  - **★★현 위치(2026-08-31) = ablation 완주·종결.** CELL 32~38 실행·검출레벨 재검증·miss 육안 완료. **결론=최상단 ▶▶▶▶ §ablation 최종결론**(over≫screen·scale 두체제·스필정밀화·⑤기각·큐레이션 비레버·성김 3중·대형gap 1/3 GT+2/3 under-box·통합=코어반응·0a철회). NIST ign rescue(32-nist)로 이벤트 2·소형유류 스트레스행 추가.
 
 
 ## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)
