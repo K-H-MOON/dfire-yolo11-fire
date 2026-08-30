@@ -15,7 +15,7 @@
 #  출력: <src>\extracted\rgba\*.png (알파 매트) · <src>\extracted\vfx_qc.png (몽타주)
 #  취급: 소재 라이선스=CC0 우선 · 클립 목록·출처 기록(재현성). 소재 자체 재배포 금지 유의.
 # =====================================================================================
-import os, sys, glob, argparse
+import os, sys, glob, argparse, hashlib
 
 
 def main():
@@ -78,8 +78,16 @@ def main():
     print('=' * 70)
     print(f' VFX 추출 · 영상 {nvid} + 이미지 {nimg} · 클립당 {args.per_clip}프레임 · luma-key lo{args.lo}/hi{args.hi}')
     print('=' * 70)
+    seen_md5 = set(); n_dup = 0
     for vi, (vp, kind) in enumerate(srcs):
         base = os.path.splitext(os.path.basename(vp))[0][:20]
+        try:
+            with open(vp, 'rb') as fh: md5 = hashlib.md5(fh.read()).hexdigest()
+        except Exception:
+            md5 = None
+        if md5 and md5 in seen_md5:
+            n_dup += 1; print(f'  [{vi+1}] {base}: [dup] 내용중복 스킵'); continue
+        if md5: seen_md5.add(md5)
         if kind == 'image':
             im = imread_u(vp)
             grabbed = [(0, im)] if im is not None else []
