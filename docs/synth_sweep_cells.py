@@ -778,3 +778,128 @@ def draw_comp(a, it):
 
 montage(bareFP, draw_bare, f'맨배경 헛불 (conf{C0}) — 무엇에 오탐? (주황물체 색혼동?)', f'{OUT}/fp_bare.png')
 montage(compFP, draw_comp, f'불꽃 붙인 뒤 불꽃외 헛불 (conf{C0}·초록=진짜불꽃·빨강=헛불) — 배경물체? 붙여넣기?', f'{OUT}/fp_synth_induced.png')
+
+
+# ========== CELL 29: AI-Hub ENB 불꽃 vs NIST 유류불 — base recall 실측 (paired·소스만 다른 변수) ==========
+# objective (A) 직답: D-Fire base가 'AI-Hub 실내 불꽃' 합성을 얼마나 인식하나? NIST 유류불(CELL27=0.994)과 동일 파이프라인.
+#   ★한 변수 = 불꽃 소스(NIST corn-oil KEEP6  vs  AI-Hub ENB 크롭 전부). 배경·스케일·위치·N·SEED·추출(extract_flame)·합성(paste) 전부 동일.
+#   ★paired: 배경/위치 '계획'을 SEED로 1회 생성해 두 뱅크에 공유 → 소스 외 조건 완전 동일(다른세션 비교 아님).
+#   예측 안 함 — 숫자로 답. 준비: 로컬 aihub_enb_crop.py 산출 crops → Drive firecrop_src/aihub_enb (또는 aihub_enb_crops.zip 업로드시 자동 언집).
+#   출처: AI-Hub 71751(불꽃추출·비배포·출처표기) · NIST FCD(퍼블릭도메인).
+import os, glob, subprocess, sys, hashlib, zipfile
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W    = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+BG   = '/content/drive/MyDrive/realneg_frames/synth'
+FSRC = '/content/drive/MyDrive/firecrop_src'
+NIST = f'{FSRC}/nist_stovetop_cornoil'
+AIH  = f'{FSRC}/aihub_enb'
+OUT  = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SEED = 0; N_COMP = 160; SCALES = [0.11, 0.25]; CONFS = (0.05, 0.25, 0.50)
+KEEP_NIST = ['1574198232-Evt3', '1574198232-EvtP', '1574199884-Evt3', '1574199884-EvtP',
+             '1508954077-EvtP', '1508958465-EvtP']
+
+# AI-Hub crops: 폴더 없으면 zip 자동 언집
+if not os.path.isdir(AIH) or not glob.glob(f'{AIH}/*.jpg'):
+    zp = f'{FSRC}/aihub_enb_crops.zip'
+    if os.path.exists(zp):
+        os.makedirs(AIH, exist_ok=True)
+        with zipfile.ZipFile(zp) as zf: zf.extractall(AIH)
+        print(f'[unzip] {zp} → {AIH} ({len(glob.glob(f"{AIH}/*.jpg"))} jpg)')
+
+def extract_flame(path):                        # ★CELL27과 동일(largest-CC)
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    mm = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(mm); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad)
+    x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; m2 = mm[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*m2*255]).astype(np.uint8))
+
+def load_bank(src, glob_pat, keep):
+    out, seen = [], set()
+    for p in sorted(glob.glob(f'{src}/{glob_pat}')):
+        bn = os.path.basename(p)
+        if keep is not None and not any(k in bn for k in keep): continue
+        md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
+        if md5 in seen: continue
+        fl = extract_flame(p)
+        if fl is None or max(fl.size) < 60: continue
+        seen.add(md5); out.append((bn[:26], fl))
+    return out
+
+def paste(bg_img, fl_rgba, px, py):             # ★CELL27과 동일
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, W_ = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W_, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, W_), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[..., 3:4]/255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[..., :3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter/ua if ua > 0 else 0.0
+
+def detect_top(m, pil, gt):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return 0.0, 0.0
+    xy = r.boxes.xyxy.cpu().numpy(); cf = r.boxes.conf.cpu().numpy()
+    top = float(cf.max())
+    box_ok = max([cf[i] for i in range(len(cf)) if gt and iou(xy[i], gt) >= 0.5] + [0.0])   # bbox-정합 최고conf
+    return top, box_ok
+
+banks = {'NIST_cornoil': load_bank(NIST, '*FIRE*.jpg', KEEP_NIST),
+         'AIHub_ENB':    load_bank(AIH,  '*.jpg', None)}
+for nm, fl in banks.items(): print(f'  뱅크 {nm:14}: {len(fl)}종')
+assert banks['NIST_cornoil'] and banks['AIHub_ENB'], '뱅크 비었음 — 경로/업로드 확인'
+m = YOLO(W); bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
+
+# ★paired 계획: (배경, ux, uy) 를 SEED로 1회 생성 → 두 뱅크에 공유. 불꽃 index만 뱅크별 RNG.
+def make_plan(n):
+    r = np.random.default_rng(SEED); pl = []
+    for _ in range(n):
+        pl.append((bgs[int(r.integers(len(bgs)))], float(r.uniform(0.15, 0.85)), float(r.uniform(0.35, 0.75))))
+    return pl
+
+print(f'\n{"뱅크":14}{"scale":>7}  ' + '  '.join(f'img@{c}' for c in CONFS) + '   box@0.25   miss')
+results = {}
+for FS in SCALES:
+    plan = make_plan(N_COMP)
+    for bank_nm, flames in banks.items():
+        fr = np.random.default_rng(SEED + 12345)     # 불꽃 선택 RNG(뱅크별 동일 시드→같은 순번, 뱅크 크기만 다름)
+        tops, boxoks = [], []
+        for bp, ux, uy in plan:
+            bg = Image.open(bp).convert('RGB'); Wd, Hd = bg.size
+            nm, fl = flames[int(fr.integers(len(flames)))]
+            th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); fl_r = fl.resize((tw, th))
+            px = int(Wd*ux - tw/2); py = int(Hd*uy - th/2)
+            comp, gt = paste(bg, fl_r, px, py)
+            if gt is None: continue
+            t, b = detect_top(m, comp, gt); tops.append(t); boxoks.append(b)
+        tops = np.array(tops); boxoks = np.array(boxoks); n = len(tops)
+        cells = '  '.join(f'{(tops>=c).mean():.3f}' for c in CONFS)
+        box025 = (boxoks >= 0.25).mean(); miss = (tops < 0.25).mean()
+        print(f'{bank_nm:14}{FS:>7}  {cells}   {box025:.3f}     {miss:.1%}  (n={n})')
+        results[(bank_nm, FS)] = (tops, boxoks)
+
+print('\n※ 판정: 두 뱅크 img@0.25 를 직접 비교(같은 배경/위치/N/SEED). NIST≈0.994(CELL27 재현) 대비 AIHub 값이 실측 답.')
+print('  img@ = 프레임에 conf≥임계 박스 하나라도(=화재 프레임 인식) · box@0.25 = 진짜 불꽃 위치와 IoU≥0.5 정합(위치까지 맞음).')
