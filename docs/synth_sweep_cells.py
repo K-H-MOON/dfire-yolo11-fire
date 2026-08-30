@@ -1198,3 +1198,141 @@ fig.suptitle('CELL31 DRY-RUN: 초록=GT불꽃 · 빨강=base검출(conf>=0.25)')
 plt.tight_layout(); plt.savefig(f'{OUT}/dryrun_montage.png', dpi=85, bbox_inches='tight'); plt.show()
 print('\n몽타주:', f'{OUT}/dryrun_montage.png')
 print('※ 버그체크: (1)L3/L4 불꽃이 박스하단(조리면)에 앉았나 (2)L1 over→L2 screen 밝아짐 (3)L4 스필 글로우 (4)GT초록=불꽃만(스필 제외)')
+
+
+# ========== CELL 32 (본실험 ablation): over base + 수정4 반영 ==========
+# 수정: (1)spill=additive (2)0-c 배경FP 제외 (3)랜덤 다중시드(bg별 공유=페어링) (4)NIST 파일뱅크.
+# 조건0: 0a_hard(불투명 사각형·바닥) · 0-c(무불꽃 배경FP·아래서 측정) · 0-b(생성셋 0.809·CELL 확인·여기 미포함).
+# 계단: over_rand → over_ctx(배치) → over_ctx_spill(스필) + screen_ctx(washout 다배경 확정).
+# SCALE 64/128/256(무업스케일) × SOURCE(VFX/NIST) × 18배경. 장면단위 집계. 지표 recall/tp_conf/synth_FP.
+import os, glob, csv, subprocess, sys, json, unicodedata
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+from collections import defaultdict
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR = '/content/drive/MyDrive'; FSRC = f'{DR}/firecrop_src'
+W = f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt'; BG_ROOT = f'{DR}/realneg_frames/synth'
+VFXB = f'{FSRC}/vfx_bank'; NISTB = f'{FSRC}/nist_bank'; OUT = f'{DR}/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SCALES = [64, 128, 256]; SEEDS = 3; CONF = 0.25
+
+def screen(a, b): return 255.0 - (255.0-a)*(255.0-b)/255.0
+def ropen(p):
+    for q in (p, unicodedata.normalize('NFC', p), unicodedata.normalize('NFD', p)):
+        try: return Image.open(q).convert('RGB')
+        except Exception: pass
+    return None
+def core_lum(rgba):
+    a = rgba[..., 3]/255.; lum = 0.299*rgba[...,0]+0.587*rgba[...,1]+0.114*rgba[...,2]; m = a > 0.5
+    return float(np.percentile(lum[m], 98)) if m.any() else 200.0
+def composite(bg_pil, flame, point, scale_px, anchor_frac, blend='over', spill=False, hard=False):
+    bg = np.asarray(bg_pil).astype(np.float32); H, Wd = bg.shape[:2]
+    fr = Image.fromarray(flame, 'RGBA'); tw = max(1, int(fr.width*scale_px/fr.height))
+    flr = np.asarray(fr.resize((tw, scale_px))).astype(np.float32); fh, fw = flr.shape[:2]
+    ax = fw//2; ay = int(anchor_frac*(fh-1)); px = int(point[0]-ax); py = int(point[1]-ay)
+    cx, cy = px+fw//2, py+fh//2; out = bg.copy()
+    if spill:                                                            # ★수정1: additive 반사광
+        yy, xx = np.mgrid[0:H, 0:Wd]; d2 = (xx-cx)**2+(yy-cy)**2; r0 = fh*0.3
+        inten = (core_lum(flame)/255.)*(r0*r0/(d2+r0*r0))*0.7
+        out = np.clip(out + np.dstack([inten*255, inten*140, inten*40]).astype(np.float32), 0, 255)
+    x0c, y0c = max(0, px), max(0, py); xe = min(Wd, px+fw); ye = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = xe-x0c, ye-y0c; A = np.zeros((H, Wd), np.float32)
+    if rw > 0 and rh > 0:
+        reg = flr[fy0:fy0+rh, fx0:fx0+rw]; rgb = reg[..., :3]; flame_a = reg[..., 3:4]/255.
+        al = np.ones_like(flame_a) if hard else flame_a   # hard=불투명 사각형 붙임(0-a) · 단 GT는 flame_a로 통일
+        dst = out[y0c:y0c+rh, x0c:x0c+rw]; blended = screen(dst, rgb) if blend == 'screen' else rgb
+        out[y0c:y0c+rh, x0c:x0c+rw] = dst*(1-al) + blended*al; A[y0c:y0c+rh, x0c:x0c+rw] = flame_a[..., 0]
+    ys, xs = np.where(A > 0.1)
+    gt = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), gt
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih; ua = (a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter
+    return inter/ua if ua > 0 else 0.0
+def dets_of(m, pil):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return []
+    return list(zip(r.boxes.xyxy.cpu().numpy().tolist(), r.boxes.conf.cpu().numpy().tolist()))
+
+def load_bank(bd, filt=None):
+    out = []
+    for r in csv.DictReader(open(f'{bd}/manifest.csv')):
+        if filt and not filt(r): continue
+        out.append((r['source'], r['scene_id'], f'{bd}/{r["matte"]}', float(r['anchor_frac']), int(r['h'])))
+    return out
+vfx = load_bank(VFXB); byscene = {}
+for s in vfx: byscene.setdefault(s[1], s)                                 # 장면당 1매트
+vfx = list(byscene.values())
+nist = load_bank(NISTB, filt=lambda r: r.get('equip_flag') != 'Y' and int(r['h']) >= 256)   # 깨끗 peak만
+sources = vfx + nist
+print(f'소스: VFX {len(vfx)}장면 + NIST {len(nist)}장면 = {len(sources)}')
+
+BG_MAN = json.load(open(f'{FSRC}/manifest.json')); PLACE = json.load(open(f'{FSRC}/placement.json'))
+bgs = []
+for n in sorted(PLACE):
+    im = ropen(f'{BG_ROOT}/{BG_MAN[n]}')
+    if im is not None: bgs.append((n, im, PLACE[n]))
+print(f'배경: {len(bgs)}장')
+m = YOLO(W)
+
+# ★수정2: 0-c 배경 FP 박스 집합 (무불꽃 배경)
+bgfp = {}
+for n, im, box in bgs:
+    bgfp[n] = [xy for xy, cf in dets_of(m, im) if cf >= CONF]
+print(f'0-c 배경FP: ' + ', '.join(f'{n[:5]}:{len(bgfp[n])}' for n, _, _ in bgs))
+
+# ★수정3: bg별 랜덤위치 다중시드(소스 공유=페어링)
+randpts = {}
+for n, im, box in bgs:
+    Wd, Hd = im.size; pl = []
+    for sd in range(SEEDS):
+        r = np.random.default_rng(1000*sd + sum(map(ord, n)))
+        pl.append((int(r.uniform(0.2, 0.8)*Wd), int(r.uniform(0.4, 0.7)*Hd)))
+    randpts[n] = pl
+
+def synth_fp(dets, gt, n):                                               # 배경FP 제외한 합성유발 FP
+    best = 0.0
+    for xy, cf in dets:
+        if cf < CONF: continue
+        if gt and iou(xy, gt) >= 0.3: continue
+        if any(iou(xy, b) >= 0.5 for b in bgfp[n]): continue
+        best = max(best, cf)
+    return best
+
+LEVELS = [('0a_hard_ctx', 'over', False, 'context', True), ('over_rand', 'over', False, 'random', False),
+          ('over_ctx', 'over', False, 'context', False), ('screen_ctx', 'screen', False, 'context', False),
+          ('over_ctx_spill', 'over', True, 'context', False)]
+rows = []
+for si, (src, scene, mpath, anchor, mh) in enumerate(sources):
+    flame = np.asarray(Image.open(mpath).convert('RGBA'))
+    for scale in SCALES:
+        if mh < scale: continue                                          # 무업스케일
+        for lname, blend, spill, pos, hard in LEVELS:
+            hit = []; tpc = []; sfp = []
+            for n, im, box in bgs:
+                pts = [((box[0]+box[2])//2, box[3])] if pos == 'context' else randpts[n]
+                for point in pts:
+                    comp, gt = composite(im, flame, point, scale, anchor, blend, spill, hard)
+                    if gt is None: continue
+                    dts = dets_of(m, comp)
+                    tp = max([cf for xy, cf in dts if iou(xy, gt) >= 0.5] + [0.0])
+                    hit.append(1 if tp >= CONF else 0); tpc.append(tp); sfp.append(synth_fp(dts, gt, n))
+            if hit:
+                rows.append((src, scene, scale, lname, float(np.mean(hit)), float(np.mean(tpc)), float(np.mean(sfp))))
+    if (si+1) % 5 == 0: print(f'  ...{si+1}/{len(sources)} 소스 처리')
+
+# --- 장면단위 집계: (source,scale,level) 위에서 장면 평균 ---
+agg = defaultdict(list)
+for src, scene, scale, lname, rec, tp, sfp in rows: agg[(src, scale, lname)].append((rec, tp, sfp))
+print(f'\n{"src":5}{"scale":>6}  {"level":16}{"recall":>8}{"tp_conf":>8}{"synFP":>7}{"scenes":>7}')
+for (src, scale, lname) in sorted(agg):
+    v = agg[(src, scale, lname)]
+    print(f'{src:5}{scale:>6}  {lname:16}{np.mean([x[0] for x in v]):>8.3f}{np.mean([x[1] for x in v]):>8.3f}{np.mean([x[2] for x in v]):>7.3f}{len(v):>7}')
+json.dump(rows, open(f'{OUT}/ablation_rows.json', 'w'))
+print('\n저장: synth_sweep/ablation_rows.json (장면별 원자료)')
+print('※ 핵심: over_ctx vs screen_ctx(washout 다배경 확정) · over_rand vs over_ctx(발견2 배치효과) · over_ctx vs over_ctx_spill(스필) · scale별 · VFX vs NIST(NIST=경향).')
