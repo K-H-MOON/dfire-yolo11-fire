@@ -780,11 +780,14 @@ montage(bareFP, draw_bare, f'맨배경 헛불 (conf{C0}) — 무엇에 오탐? (
 montage(compFP, draw_comp, f'불꽃 붙인 뒤 불꽃외 헛불 (conf{C0}·초록=진짜불꽃·빨강=헛불) — 배경물체? 붙여넣기?', f'{OUT}/fp_synth_induced.png')
 
 
-# ========== CELL 29: AI-Hub ENB 불꽃 vs NIST 유류불 — base recall 실측 (paired·소스만 다른 변수) ==========
-# objective (A) 직답: D-Fire base가 'AI-Hub 실내 불꽃' 합성을 얼마나 인식하나? NIST 유류불(CELL27=0.994)과 동일 파이프라인.
-#   ★한 변수 = 불꽃 소스(NIST corn-oil KEEP6  vs  AI-Hub ENB 크롭 전부). 배경·스케일·위치·N·SEED·추출(extract_flame)·합성(paste) 전부 동일.
-#   ★paired: 배경/위치 '계획'을 SEED로 1회 생성해 두 뱅크에 공유 → 소스 외 조건 완전 동일(다른세션 비교 아님).
-#   예측 안 함 — 숫자로 답. 준비: 로컬 aihub_enb_crop.py 산출 crops → Drive firecrop_src/aihub_enb (또는 aihub_enb_crops.zip 업로드시 자동 언집).
+# ========== CELL 29: AI-Hub ENB 불꽃 vs NIST 유류불 — base recall 실측 (paired) ==========
+# objective (A) 직답: D-Fire base가 'AI-Hub 실내 불꽃' 합성을 얼마나 인식하나? NIST 유류불(CELL27=0.994)과 비교.
+#   ★비교 = 불꽃 소스(NIST corn-oil KEEP6 [색마스크추출]  vs  AI-Hub ENB 수동박스16 [페더알파]).
+#   ⚠️추출법은 소스별 최적: NIST=색마스크 자동 · AI-Hub=사람이 박스+가장자리 페더(색마스크가 AI-Hub엔 실패해 v1/v2/QC 탈락 → 수동).
+#      NIST는 참조 천장(CELL27 0.994 재현 확인용). 배경·스케일·위치·N·SEED·합성(paste)·평가는 두 뱅크 동일.
+#   ★paired: 배경/위치 '계획'을 SEED로 1회 생성해 두 뱅크 공유 → 소스 외 조건 동일(다른세션 비교 아님).
+#   예측 안 함 — 숫자로 답. 준비: 로컬 manual_flame_box.py→manual_crops → Drive firecrop_src/aihub_enb_manual
+#      (또는 aihub_enb_manual_crops.zip 업로드시 자동 언집).
 #   출처: AI-Hub 71751(불꽃추출·비배포·출처표기) · NIST FCD(퍼블릭도메인).
 import os, glob, subprocess, sys, hashlib, zipfile
 try: import ultralytics
@@ -800,21 +803,21 @@ W    = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
 BG   = '/content/drive/MyDrive/realneg_frames/synth'
 FSRC = '/content/drive/MyDrive/firecrop_src'
 NIST = f'{FSRC}/nist_stovetop_cornoil'
-AIH  = f'{FSRC}/aihub_enb'
+AIH  = f'{FSRC}/aihub_enb_manual'                # ★사람이 박스 친 수동 크롭(색마스크 실패 대체)
 OUT  = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
 SEED = 0; N_COMP = 160; SCALES = [0.11, 0.25]; CONFS = (0.05, 0.25, 0.50)
 KEEP_NIST = ['1574198232-Evt3', '1574198232-EvtP', '1574199884-Evt3', '1574199884-EvtP',
              '1508954077-EvtP', '1508958465-EvtP']
 
-# AI-Hub crops: 폴더 없으면 zip 자동 언집
+# AI-Hub 수동 크롭: 폴더 없으면 zip 자동 언집
 if not os.path.isdir(AIH) or not glob.glob(f'{AIH}/*.jpg'):
-    zp = f'{FSRC}/aihub_enb_crops.zip'
+    zp = f'{FSRC}/aihub_enb_manual_crops.zip'
     if os.path.exists(zp):
         os.makedirs(AIH, exist_ok=True)
         with zipfile.ZipFile(zp) as zf: zf.extractall(AIH)
         print(f'[unzip] {zp} → {AIH} ({len(glob.glob(f"{AIH}/*.jpg"))} jpg)')
 
-def extract_flame(path):                        # ★CELL27과 동일(largest-CC)
+def extract_flame(path):                        # ★NIST용: 색마스크 largest-CC (CELL27과 동일)
     im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
     R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R + 0.587*G + 0.114*B
     mask = ((R > B + 30) & (R > 90)) | (lum > 210)
@@ -827,14 +830,21 @@ def extract_flame(path):                        # ★CELL27과 동일(largest-CC
     crop = im[y0:y1, x0:x1]; m2 = mm[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
     return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*m2*255]).astype(np.uint8))
 
-def load_bank(src, glob_pat, keep):
+def alpha_feather(path, fr=0.08):               # ★AI-Hub 수동크롭용: 카빙0·가장자리만 소프트(불꽃 보존·QC 채택 B안)
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    h, w = im.shape[:2]; fpx = max(2, int(min(h, w)*fr))
+    inner = np.zeros((h, w), np.float32); inner[fpx:h-fpx, fpx:w-fpx] = 1.0
+    a = np.clip(ndimage.gaussian_filter(inner, fpx*0.6), 0, 1)
+    return Image.fromarray(np.dstack([im, a*255]).astype(np.uint8))
+
+def load_bank(src, glob_pat, keep, extractor):
     out, seen = [], set()
     for p in sorted(glob.glob(f'{src}/{glob_pat}')):
         bn = os.path.basename(p)
         if keep is not None and not any(k in bn for k in keep): continue
         md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
         if md5 in seen: continue
-        fl = extract_flame(p)
+        fl = extractor(p)
         if fl is None or max(fl.size) < 60: continue
         seen.add(md5); out.append((bn[:26], fl))
     return out
@@ -867,8 +877,8 @@ def detect_top(m, pil, gt):
     box_ok = max([cf[i] for i in range(len(cf)) if gt and iou(xy[i], gt) >= 0.5] + [0.0])   # bbox-정합 최고conf
     return top, box_ok
 
-banks = {'NIST_cornoil': load_bank(NIST, '*FIRE*.jpg', KEEP_NIST),
-         'AIHub_ENB':    load_bank(AIH,  '*.jpg', None)}
+banks = {'NIST_cornoil': load_bank(NIST, '*FIRE*.jpg', KEEP_NIST, extract_flame),
+         'AIHub_ENB':    load_bank(AIH,  '*.jpg', None, alpha_feather)}
 for nm, fl in banks.items(): print(f'  뱅크 {nm:14}: {len(fl)}종')
 assert banks['NIST_cornoil'] and banks['AIHub_ENB'], '뱅크 비었음 — 경로/업로드 확인'
 m = YOLO(W); bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
