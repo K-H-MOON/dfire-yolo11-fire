@@ -25,7 +25,13 @@
   - **★Phase2 종결 — VFX 뱅크 확정(2026-08-30)**: CC0 49영상 → md5 dedup(6중복) 43고유 → 1차QC 탈락16(자동⚠4+애매12 불꽃끊김) → 클린27 → 2차QC(뱅크 육안·Claude 판독) 추가정제: 18084807 제외·10141290/9667144/9667220 불량프레임 제거(9667144는 블로운 f267 제거·대각텍스처 f144 유지·5659686 하단=불base라 유지). **최종 49 매트·26 장면·높이 528~1920px(전부≥256=업스케일0)**. 매니페스트=matte→scene_id[Pexels ID]→source=VFX→**orientation(vert40/horiz8/diag1 — 수평/대각은 L3 배치 다르게)**→**anchor_frac(접지선=주불꽃 base y/h·합성 시 배치점에 이 y 정렬=일관 접지)**→**core_lum/whitish_frac/high_bright(L4 스필 소스의존 해석용·VFX가 대체로 밝음=movie-fire)**. **★집계=26 장면 단위**(클립당 2프레임 유사→scene ID로 pseudoreplication 회피·NIST와 동일). `vfx_bank.zip`(34.3MB·crops+manifest) → Drive `firecrop_src/` 업로드 대기. 도구=`vfx_extract.py`(md5 dedup·영상/이미지).
   - **★Phase3 배경 마킹 완료(2026-08-30)**: CELL A로 주방배경 18장 샘플 다운 → `mark_placement.py`로 조리면에 불배치 박스 마킹(박스 하단=조리표면) → **placement.json 18장 전부** + manifest.json(bg→Drive rel) → Drive `firecrop_src/` 업로드. (tkinter 창 닫기 먹통이나 증분저장 덕에 데이터 안전.) 소스 확정=VFX26장면+NIST(peak2=256px가능)+AIHub4보류.
   - **★Phase4 관통 테스트 = `synth_sweep_cells.py` CELL 31(DRY-RUN)**: 2소스(VFX1+NIST1)×2배경×L1-L4(scale128). 합성함수(screen 블렌딩·물리스필[코어휘도∝·역제곱]·anchor_frac 접지·GT=불꽃bbox 고정)+지표(tp_conf/fp_conf)+몽타주 육안 검증. **통과시 전체 ablation(0-a/b/c + L1-L4 × scale64/128/256 × VFX/NIST · 장면집계 · 지표 recall/FP/conf/PR-AP/IoU/miss육안)로.**
-  - **현 위치=CELL 31 dry-run 실행 직전.**
+  - **★CELL 31 dry-run/diagnostic 결과(2026-08-30·2소스×2배경): 파이프라인 정상 + 2발견**:
+    - **★★발견 2(진짜 수확·교란없음)**: blend 고정(over) 순수 배치효과서 **over_rand→over_ctx가 bg00 유지(0.483→0.579)·bg01 붕괴(0.240→0.001·0.466→0.000)**. = **물리적으로 옳은 배치(밝은 조리면 위)가 프리즈 base엔 오히려 더 어렵다**(D-Fire=야외/일반화재라 밝은 조리면 저대비 불꽃 미학습=도메인갭). **Dvornik/Ghiasi(둘 다 *학습*효과)에 제3의 답=*평가난이도*↑.** Phase B 근거(base 놓침=학습 정보량 큼). "(A) recall최대화=쉬운샘플 선택" 함정이 실측됨.
+    - **screen washout(발견1)**: bg00 over_ctx 0.579 vs screen_ctx 0.025(23×). 밝은 배경서 screen(≈255)이 불꽃 지움·over는 교체라 살림. **단 근거 n=2(bg00만)·spill행은 교란(spill이 blend무관 항상 screen)** → "bg00 한정 확인·본실험서 다배경 확정" (screen 기각 *방향* 맞음).
+    - **spill=판정불가**(0.595 vs 0.471·방향갈림·n=2). "중립" 아님.
+  - **★본실험 전 코드수정 4**: (1)spill글로우=additive(blend분리) (2)FP=0-c 배경FP집합 먼저→합성서 IoU높은것 제외 (3)랜덤위치 다중시드 (4)**NIST 매트 파일화(nist_bank·VFX와 동형식)** — 즉석추출이면 SOURCE 비교 오염.
+  - **설계 확정**: base 블렌딩=**over**(screen=문서화된 기각방법·bg00). 계단 over_rand→over_ctx→over_ctx_spill + over_ctx/screen_ctx 다배경 비교. 18배경·scale64/128/256·장면집계.
+  - **현 위치=NIST 매트 뱅크 셀 실행 직후 → 본실험 ablation 셀 작성.**
 
 
 ## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)
