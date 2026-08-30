@@ -2,6 +2,19 @@
 
 **상태(2026-08-29): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) — 스케일·열화 sweep + 합성유발 FP 완료(§step4 sweep) = step4 사실상 종결. AI-Hub 보류(다운로드 불완전). 남은 프런티어=실 양성 데이터 확보(막힌 (b)/배포).** (파이프라인 6단계 = §프로젝트 파이프라인.)
 
+## ▶▶▶ 2026-08-30 최신 — 불꽃 합성 방법론 ablation 설계 확정 (VFX-pivot)
+**목표=여전히 (A)**: frozen YOLO11s(ptrain_b79)가 *합성*을 얼마나 인식하나(recall/precision/confidence). 학습(B) 아님.
+- **근거 원장 = [`docs/SYNTH_METHOD_EVIDENCE.md`](SYNTH_METHOD_EVIDENCE.md)** — 각 설계요소의 논문 원문(verbatim)+[직접실증/간접/근거없음] 분류. 보고서 "왜 이 방법" 근거표.
+- **소스 전환(AI-Hub→VFX 중심)**: AI-Hub ENB 16 실측=약함(조리불 아님·bbox만·9/16 업스케일·실장면 ~7·recall 0.775<NIST 0.981). → **VFX CC0 검은배경(알파=측정·HD=업스케일0·클립 25-40=독립성↑·screen과 궁합)** 대량 + **NIST 조리유 4(앵커·조리유=대체불가·source 그룹변수)** + **AI-Hub 4장(0970/1169/1170/1187) 보류**.
+- **측정=순차 ablation(paired)**: 기준선 **0-a**(하드 사각형·알파X 바닥)·**0-b**(기존 생성셋 NanoBanana ~0.8·**unpaired 절대비교만**·접근성 Phase1 확인)·**0-c**(무화염 배경 FP기준·필수) + 계단 **L1**(over+랜덤)→**L2**(→screen, over *대체*)→**L3**(+컨텍스트배치)→**L4**(+스필). 각 단계 recall+FP 측정.
+- **교차/규칙**: SCALE=절대픽셀 불꽃높이 64/128/256(모든 L에 교차·소스별 상한=업스케일금지·결측셀 명시) · SOURCE=VFX/NIST 그룹변수(일반불 vs 조리유). **GT박스=배치박스 고정**(스필로 재추출 금지). **장면단위 집계**(pseudoreplication 회피). pairing: L1↔L2 완전·L2↔L3 위치=변수·L3↔L4 완전. **NIST 셀 n=3=경향만(검정X)**.
+- **지표(Phase5)**: recall(img/box)+FP(vs 0-c)+**TP 평균 confidence**(recall 포화 보완·FGL-GAN 선례)+conf sweep PR/AP+IoU분포 + **miss 케이스 육안 20-30**.
+- **스필 물리고정**: 코어휘도∝·역제곱(코어반경 clamp)·거리감쇠(FGL-GAN 반사광). 임의값 금지.
+- **★정정(SYNTH_METHOD_EVIDENCE §9/Rec 강제)**: "BoWFire FP 80%↓"=근거없음 **철회** · arXiv:2606.19817=미래/오타 **철회**(Borji 2103.09396 대체) · DACBFIAM=미검증 · **L3=가설**(Ghiasi 무작위충분 ↔ Dvornik 컨텍스트우월 양방향) · **L2 screen=간접근거→벤치마크**(TP conf 95%CI 0배제 못하면 over 유지) · **frozen-검출기-심판 통합=직접선례 없음→"표준요소 신규조합"으로 정직 기술**.
+- **실행 순서**: Phase1 GATE(pHash≤6+육안: NIST·AIHub4 vs D-Fire · **+0-b Roboflow 접근확인** · D-Fire=로컬없음/Colab Roboflow만) → Phase2 VFX(파일럿 5클립·통과기준 "≥3/5 클린알파"·본수집·QC게이트·GATE-2) → Phase3 뱅크+**배경 마킹(기준명시)·배경수 확정**·NIST 큰화염 2-4장 추가 → Phase4 관통테스트(소스2×배경2) 후 전체.
+- **도구**: `scripts/mark_placement.py`(배경 불배치 마킹)·`scripts/manual_flame_box.py`(불꽃 박싱)·`docs/synth_sweep_cells.py` CELL29(AIHub vs NIST recall)·CELL30(추출 원인분리). **현 위치=Phase1 GATE 직전.**
+
+
 ## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)
 **목표 재확인**: (A) *합성*을 base가 잘 인식하게 개선(프록시=frozen-base recall on 합성). (B)전이/실데이터 학습 아님.
 - **소스 결정**: 실사 NIST 스토브탑 corn oil **6종**만 사용(생성형 다양성은 *학습 단계*로 보류 — 지금 섞으면 "크기·화질" 인과에 "가짜불꽃" 교란). 공개 실사 마스킹가능 조리유류불은 ~6-12장이 천장(NIST FCD)·Kitchen Room Fire는 광각(마스킹난)·heptane은 도메인갭+라이선스 → 다 후순위.
