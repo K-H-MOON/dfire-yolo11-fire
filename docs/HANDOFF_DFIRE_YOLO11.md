@@ -12,8 +12,15 @@
 - **스필 물리고정**: 코어휘도∝·역제곱(코어반경 clamp)·거리감쇠(FGL-GAN 반사광). 임의값 금지.
 - **★정정(SYNTH_METHOD_EVIDENCE §9/Rec 강제)**: "BoWFire FP 80%↓"=근거없음 **철회** · arXiv:2606.19817=미래/오타 **철회**(Borji 2103.09396 대체) · DACBFIAM=미검증 · **L3=가설**(Ghiasi 무작위충분 ↔ Dvornik 컨텍스트우월 양방향) · **L2 screen=간접근거→벤치마크**(TP conf 95%CI 0배제 못하면 over 유지) · **frozen-검출기-심판 통합=직접선례 없음→"표준요소 신규조합"으로 정직 기술**.
 - **실행 순서**: Phase1 GATE(pHash≤6+육안: NIST·AIHub4 vs D-Fire · **+0-b Roboflow 접근확인** · D-Fire=로컬없음/Colab Roboflow만) → Phase2 VFX(파일럿 5클립·통과기준 "≥3/5 클린알파"·본수집·QC게이트·GATE-2) → Phase3 뱅크+**배경 마킹(기준명시)·배경수 확정**·NIST 큰화염 2-4장 추가 → Phase4 관통테스트(소스2×배경2) 후 전체.
-- **도구**: `scripts/mark_placement.py`(배경 불배치 마킹)·`scripts/manual_flame_box.py`(불꽃 박싱)·`docs/synth_sweep_cells.py` CELL29(AIHub vs NIST recall)·CELL30(추출 원인분리).
-- **★Phase1 GATE 통과(2026-08-30)**: 0-b 접근 OK(생성셋 351장+라벨 → recall~0.8 기준선 재측정 가능) · **오염 없음**(NIST14+AIHub16 프레임 vs D-Fire 21,522 전체 pHash 최소 Hamming 10~17 > 임계6 · 육안 몽타주 `synth_sweep/gate_phash_montage.png`서 최근접도 전혀 다른 장면 확인). base 학습셋과 무겹침 확정. **현 위치=Phase2(VFX 파일럿) 직전.**
+- **도구**: `scripts/mark_placement.py`(배경 불배치 마킹)·`scripts/manual_flame_box.py`(불꽃 박싱)·`scripts/vfx_extract.py`(VFX 프레임추출+luma-key 알파+QC·영상/이미지 둘다)·`docs/synth_sweep_cells.py` CELL29(AIHub vs NIST recall)·CELL30(추출 원인분리).
+- **★Phase1 GATE — 완전 검증 통과(2026-08-30)**:
+  - pHash 겹침 0건(NIST14+AIHub16 vs D-Fire 21,522·최소 Hamming 10~17>임계6·6~10 빈구간=무중복 신호) ✅ · 육안 몽타주(`synth_sweep/gate_phash_montage.png`) 최근접도 다른장면 ✅.
+  - **positive control 통과**: 변형(JPEG40+밝기+리사이즈) D-Fire 5장 자기인식 self Hamming 0~2 = pHash 견고·파이프라인 정상 ✅. (AoF04305 "❌"는 D-Fire 내부중복 AoF07786≡AoF04305[both H0]에 동점정렬 걸린 판정기준 오탐 — 실질 5/5. 덤: D-Fire 내부중복 존재, 알려진 dedup 21,522→10,624와 정합.)
+  - **0-b recall 재현 통과**: 프리즈 base로 gen 351장 추론 → **이미지 recall@0.25 = 0.809 = 기록 0.809 정확 일치**(박스 recall@IoU0.5 0.675) → 0-b 기준선 유효 ✅.
+  - 21,522 vs 논문 21,527: 해싱 스킵 0(글롭 전체 해시) → 차이는 Roboflow export측(우리 무손실).
+  - 사각지대: 크롭-부분영역/동일사건-다른프레임 = pHash 배제 불가 → **출처 논리로 위험 낮음 *판단***(NIST=랩·AIHub=국내CCTV·D-Fire=브라질웹). "확인" 아니라 "판단"으로 기록.
+  - **★NIST 장면ID(집계 단위)=화재이벤트 4개**: `1574199884`(alumipan2)·`1574198232`(calphalon)·`1508954077`(massloss13)·`1508958465`(massloss14c). ignition/peak=같은 이벤트. NIST 14프레임 → **집계는 이 4 scene 단위·n≤4·경향만**.
+  - **현 위치=Phase2(VFX 파일럿) 직전.**
 
 
 ## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)

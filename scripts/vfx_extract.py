@@ -32,18 +32,36 @@ def main():
         sys.exit('[ERR] opencv/numpy 필요: py -3.10 -m pip install opencv-python numpy')
     from PIL import Image, ImageDraw
 
-    vids = []
-    for ext in ('*.mp4', '*.mov', '*.webm', '*.mkv', '*.avi', '*.MP4', '*.MOV'):
-        vids += glob.glob(os.path.join(args.src, ext))
-    vids = sorted(set(vids))
-    if not vids:
-        sys.exit(f'[ERR] 영상 없음: {args.src}  (CC0 검은배경 불꽃 mp4 를 여기에 저장)')
+    VID_EXT = ('.mp4', '.mov', '.webm', '.mkv', '.avi')
+    IMG_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+    srcs = []
+    for f in sorted(glob.glob(os.path.join(args.src, '*'))):
+        e = os.path.splitext(f)[1].lower()
+        if e in VID_EXT: srcs.append((f, 'video'))
+        elif e in IMG_EXT: srcs.append((f, 'image'))
+    if not srcs:
+        sys.exit(f'[ERR] 영상/이미지 없음: {args.src}  (CC0 검은배경 불꽃 mp4 또는 png/jpg 를 여기에)')
+
+    def imread_u(p):   # 비ASCII 경로 대응 + 알파 보존(사전키잉 PNG 대비)
+        try:
+            with open(p, 'rb') as fh:
+                buf = np.frombuffer(fh.read(), np.uint8)
+            im = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+            if im is None: return None
+            if im.ndim == 2: im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
+            return im
+        except Exception:
+            return None
 
     outdir = os.path.join(args.src, 'extracted'); rgba_dir = os.path.join(outdir, 'rgba')
     os.makedirs(rgba_dir, exist_ok=True)
 
-    def luma_key(bgr):
-        rgb = bgr[..., ::-1].astype(np.float32)
+    def luma_key(fr):
+        if fr.ndim == 3 and fr.shape[2] == 4:   # 이미 알파 있음(사전키잉) → 그대로 사용
+            rgb = fr[..., :3][..., ::-1].astype(np.float32)   # BGRA→RGB
+            luma = 0.299*rgb[..., 0] + 0.587*rgb[..., 1] + 0.114*rgb[..., 2]
+            return np.dstack([rgb, fr[..., 3].astype(np.float32)]).astype(np.uint8), luma
+        rgb = fr[..., ::-1].astype(np.float32)   # BGR→RGB
         luma = 0.299*rgb[..., 0] + 0.587*rgb[..., 1] + 0.114*rgb[..., 2]
         a = np.clip((luma - args.lo) / (args.hi - args.lo), 0, 1)
         return np.dstack([rgb, a*255]).astype(np.uint8), luma
@@ -56,32 +74,37 @@ def main():
         return Image.fromarray(a).convert('RGBA')
 
     cells = []   # (orig_thumb, alpha_thumb, label, stats)
+    nvid = sum(1 for _, k in srcs if k == 'video'); nimg = len(srcs) - nvid
     print('=' * 70)
-    print(f' VFX 추출 · 클립 {len(vids)}개 · 클립당 {args.per_clip}프레임 · luma-key lo{args.lo}/hi{args.hi}')
+    print(f' VFX 추출 · 영상 {nvid} + 이미지 {nimg} · 클립당 {args.per_clip}프레임 · luma-key lo{args.lo}/hi{args.hi}')
     print('=' * 70)
-    for vi, vp in enumerate(vids):
-        cap = cv2.VideoCapture(vp)
-        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if n <= 0:
-            # 일부 코덱은 프레임수 0 보고 → 순차 읽기로 대체
-            frames_all = []
-            while True:
-                ok, fr = cap.read()
-                if not ok: break
-                frames_all.append(fr)
-            n = len(frames_all)
-            picks = [int(n * t) for t in ((0.35, 0.65) if args.per_clip == 2 else
-                     [(i+1)/(args.per_clip+1) for i in range(args.per_clip)])]
-            grabbed = [(k, frames_all[k]) for k in picks if 0 <= k < n]
-        else:
-            ts = (0.35, 0.65) if args.per_clip == 2 else [(i+1)/(args.per_clip+1) for i in range(args.per_clip)]
-            grabbed = []
-            for t in ts:
-                k = int(n * t); cap.set(cv2.CAP_PROP_POS_FRAMES, k)
-                ok, fr = cap.read()
-                if ok: grabbed.append((k, fr))
-        cap.release()
+    for vi, (vp, kind) in enumerate(srcs):
         base = os.path.splitext(os.path.basename(vp))[0][:20]
+        if kind == 'image':
+            im = imread_u(vp)
+            grabbed = [(0, im)] if im is not None else []
+        else:
+            cap = cv2.VideoCapture(vp)
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if n <= 0:
+                # 일부 코덱은 프레임수 0 보고 → 순차 읽기로 대체
+                frames_all = []
+                while True:
+                    ok, fr = cap.read()
+                    if not ok: break
+                    frames_all.append(fr)
+                n = len(frames_all)
+                picks = [int(n * t) for t in ((0.35, 0.65) if args.per_clip == 2 else
+                         [(i+1)/(args.per_clip+1) for i in range(args.per_clip)])]
+                grabbed = [(k, frames_all[k]) for k in picks if 0 <= k < n]
+            else:
+                ts = (0.35, 0.65) if args.per_clip == 2 else [(i+1)/(args.per_clip+1) for i in range(args.per_clip)]
+                grabbed = []
+                for t in ts:
+                    k = int(n * t); cap.set(cv2.CAP_PROP_POS_FRAMES, k)
+                    ok, fr = cap.read()
+                    if ok: grabbed.append((k, fr))
+            cap.release()
         if not grabbed:
             print(f'  [{vi+1}] {base}: ❌ 프레임 읽기 실패(코덱?) — mp4/h264 권장'); continue
         for (k, fr) in grabbed:
@@ -95,8 +118,8 @@ def main():
             haze = float(((a > 0.05) & (a < 0.4)).mean())   # 반투명 잔여(높으면 haze/노이즈 의심)
             fname = f'{base}_f{k}.png'
             Image.fromarray(rgba, 'RGBA').save(os.path.join(rgba_dir, fname))
-            # 썸네일
-            o = Image.fromarray(fr[..., ::-1]); o.thumbnail((220, 220))
+            # 썸네일 (원본 RGB 3채널만)
+            o = Image.fromarray(fr[..., :3][..., ::-1]); o.thumbnail((220, 220))
             bg = checker(w, h); bg.alpha_composite(Image.fromarray(rgba, 'RGBA'))
             av = bg.convert('RGB'); av.thumbnail((220, 220))
             flag = 'OK' if (bg_med < 20 and cover > 0.01 and haze < 0.15) else '⚠확인'
