@@ -789,13 +789,19 @@ montage(compFP, draw_comp, f'불꽃 붙인 뒤 불꽃외 헛불 (conf{C0}·초�
 #   예측 안 함 — 숫자로 답. 준비: 로컬 manual_flame_box.py→manual_crops → Drive firecrop_src/aihub_enb_manual
 #      (또는 aihub_enb_manual_crops.zip 업로드시 자동 언집).
 #   출처: AI-Hub 71751(불꽃추출·비배포·출처표기) · NIST FCD(퍼블릭도메인).
-import os, glob, subprocess, sys, hashlib, zipfile
+import os, glob, subprocess, sys, hashlib, zipfile, unicodedata
 try: import ultralytics
 except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
 from ultralytics import YOLO
 import numpy as np
 from scipy import ndimage
 from PIL import Image
+
+def robust_open_rgb(p):   # ★Drive FUSE 한글파일명(NFC/NFD 불일치) 대응 — 여러 형태 시도, 실패시 None
+    for q in (p, unicodedata.normalize('NFC', p), unicodedata.normalize('NFD', p)):
+        try: return Image.open(q).convert('RGB')
+        except Exception: pass
+    return None
 
 if not os.path.exists('/content/drive/MyDrive'):
     from google.colab import drive; drive.mount('/content/drive')
@@ -882,6 +888,12 @@ banks = {'NIST_cornoil': load_bank(NIST, '*FIRE*.jpg', KEEP_NIST, extract_flame)
 for nm, fl in banks.items(): print(f'  뱅크 {nm:14}: {len(fl)}종')
 assert banks['NIST_cornoil'] and banks['AIHub_ENB'], '뱅크 비었음 — 경로/업로드 확인'
 m = YOLO(W); bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
+_probe = sum(1 for p in bgs[:40] if robust_open_rgb(p) is not None)
+print(f'배경 {len(bgs)}개 · 앞40개 중 열림 {_probe}/40')
+if _probe == 0:
+    print("⚠️ 배경이 하나도 안 열림 = Drive FUSE 미동기화. 아래를 '별도 셀'에 먼저 실행 후 CELL29 재실행:")
+    print("   from google.colab import drive; drive.mount('/content/drive', force_remount=True)")
+    raise SystemExit('배경 open 실패 — force_remount 후 재시도')
 
 # ★paired 계획: (배경, ux, uy) 를 SEED로 1회 생성 → 두 뱅크에 공유. 불꽃 index만 뱅크별 RNG.
 def make_plan(n):
@@ -898,7 +910,9 @@ for FS in SCALES:
         fr = np.random.default_rng(SEED + 12345)     # 불꽃 선택 RNG(뱅크별 동일 시드→같은 순번, 뱅크 크기만 다름)
         tops, boxoks = [], []
         for bp, ux, uy in plan:
-            bg = Image.open(bp).convert('RGB'); Wd, Hd = bg.size
+            bg = robust_open_rgb(bp)
+            if bg is None: continue          # ★Drive FUSE 못여는 배경은 양뱅크 동일하게 건너뜀(paired 유지)
+            Wd, Hd = bg.size
             nm, fl = flames[int(fr.integers(len(flames)))]
             th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); fl_r = fl.resize((tw, th))
             px = int(Wd*ux - tw/2); py = int(Hd*uy - th/2)
@@ -913,3 +927,148 @@ for FS in SCALES:
 
 print('\n※ 판정: 두 뱅크 img@0.25 를 직접 비교(같은 배경/위치/N/SEED). NIST≈0.994(CELL27 재현) 대비 AIHub 값이 실측 답.')
 print('  img@ = 프레임에 conf≥임계 박스 하나라도(=화재 프레임 인식) · box@0.25 = 진짜 불꽃 위치와 IoU≥0.5 정합(위치까지 맞음).')
+
+
+# ========== CELL 30: AI-Hub 0.775 원인 분리 — 알파(추출) 한 변수 {feather_B, lumfade_A, colormask} ==========
+# 질문: AIHub 0.775(scale0.25)가 (a)불꽃 자체 약함 vs (b)페더 다크헤일로 방해? → 같은 수동크롭에 알파만 바꿔 recall 비교.
+#   colormask = NIST와 동일 추출(불꽃모양만·다크코너 없음) · lumfade = 어두운코너 제거 · feather = 현행(박스 그대로).
+#   ★lumfade/colormask 가 feather_B(0.775)보다 유의하게 높으면 → (b) 다크헤일로가 주범(불꽃은 멀쩡).
+#     비슷하면 → (a) 불꽃 자체 약함(CCTV 블러/과노출/D-Fire 분포밖). + 놓친/잡은 합성 몽타주로 육안 교차확인.
+#   같은 배경/계획/SEED. scale 0.25 고정(그 지점서 차이 큼).
+import os, glob, subprocess, sys, unicodedata
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as mpatches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W   = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+BG  = '/content/drive/MyDrive/realneg_frames/synth'
+AIH = '/content/drive/MyDrive/firecrop_src/aihub_enb_manual'
+OUT = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SEED = 0; N_COMP = 160; FS = 0.25; CONFS = (0.05, 0.25, 0.50)
+
+def ropen(p):
+    for q in (p, unicodedata.normalize('NFC', p), unicodedata.normalize('NFD', p)):
+        try: return Image.open(q).convert('RGB')
+        except Exception: pass
+    return None
+
+def a_feather(path, fr=0.08):        # B: 박스 그대로(다크코너 포함)·가장자리만 소프트
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    h, w = im.shape[:2]; fpx = max(2, int(min(h, w)*fr))
+    inner = np.zeros((h, w), np.float32); inner[fpx:h-fpx, fpx:w-fpx] = 1.0
+    a = np.clip(ndimage.gaussian_filter(inner, fpx*0.6), 0, 1)
+    return Image.fromarray(np.dstack([im, a*255]).astype(np.uint8))
+
+def a_lumfade(path, lo=20, hi=65):   # A: 밝기 페이드(어두운 코너 제거)
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    lum = 0.299*im[...,0]+0.587*im[...,1]+0.114*im[...,2]
+    a = np.clip((lum-lo)/(hi-lo), 0, 1); a = ndimage.gaussian_filter(a, 0.8)
+    return Image.fromarray(np.dstack([im, a*255]).astype(np.uint8))
+
+def a_colormask(path):               # NIST와 동일: 색마스크 largest-CC(불꽃모양만)
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[...,0], im[...,1], im[...,2]; lum = 0.299*R+0.587*G+0.114*B
+    mask = ((R > B+30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    mm = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(mm); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad); x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; m2 = mm[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*m2*255]).astype(np.uint8))
+
+def load(extractor):
+    out = []
+    for p in sorted(glob.glob(f'{AIH}/*.jpg')):
+        fl = extractor(p)
+        if fl is None or max(fl.size) < 60: continue
+        out.append((os.path.basename(p)[:20], fl))
+    return out
+
+def paste(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, Wd = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(Wd, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, Wd), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[..., 3:4]/255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[..., :3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter/ua if ua > 0 else 0.0
+
+def det(m, pil):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return 0.0, np.zeros((0, 4)), np.zeros(0)
+    xy = r.boxes.xyxy.cpu().numpy(); cf = r.boxes.conf.cpu().numpy()
+    return float(cf.max()), xy, cf
+
+m = YOLO(W); bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True))
+r = np.random.default_rng(SEED)
+plan = [(bgs[int(r.integers(len(bgs)))], float(r.uniform(0.15, 0.85)), float(r.uniform(0.35, 0.75))) for _ in range(N_COMP)]
+
+variants = {'feather_B': load(a_feather), 'lumfade_A': load(a_lumfade), 'colormask': load(a_colormask)}
+print(f'{"알파":12}{"종":>4}  ' + '  '.join(f'img@{c}' for c in CONFS) + '   miss   (scale 0.25)')
+for vn, flames in variants.items():
+    fr2 = np.random.default_rng(SEED + 12345); tops = []
+    for bp, ux, uy in plan:
+        bg = ropen(bp)
+        if bg is None: continue
+        Wd, Hd = bg.size; nm, fl = flames[int(fr2.integers(len(flames)))]
+        th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); flr = fl.resize((tw, th))
+        px = int(Wd*ux - tw/2); py = int(Hd*uy - th/2)
+        comp, gt = paste(bg, flr, px, py)
+        if gt is None: continue
+        t, _, _ = det(m, comp); tops.append(t)
+    tops = np.array(tops); n = len(tops)
+    se = (tops >= 0.25).std()/max(n, 1)**0.5
+    print(f'{vn:12}{len(flames):>4}  ' + '  '.join(f'{(tops>=c).mean():.3f}' for c in CONFS) + f'   {(tops<0.25).mean():.1%} (n={n}, ±{1.96*se:.3f}@.25)')
+
+# 몽타주: feather_B 합성 중 놓친 것 vs 잡은 것 (육안 원인 확인)
+fl_b = variants['feather_B']; fr2 = np.random.default_rng(SEED + 12345)
+miss_items, hit_items = [], []
+for bp, ux, uy in plan:
+    bg = ropen(bp)
+    if bg is None: continue
+    Wd, Hd = bg.size; nm, fl = fl_b[int(fr2.integers(len(fl_b)))]
+    th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); flr = fl.resize((tw, th))
+    px = int(Wd*ux - tw/2); py = int(Hd*uy - th/2)
+    comp, gt = paste(bg, flr, px, py)
+    if gt is None: continue
+    top, xy, cf = det(m, comp)
+    tgt = miss_items if top < 0.25 else hit_items
+    if len(tgt) < 8: tgt.append((comp, gt, xy, cf, nm, top))
+
+def draw(items, title, path):
+    if not items: print('  (0장)'); return
+    K = len(items); cols = 4; rr = (K+cols-1)//cols
+    fig, ax = plt.subplots(rr, cols, figsize=(4*cols, 3*rr)); ax = np.array(ax).reshape(rr, cols)
+    for i in range(rr*cols):
+        a = ax[i//cols, i%cols]; a.axis('off')
+        if i >= K: continue
+        comp, gt, xy, cf, nm, top = items[i]; a.imshow(comp)
+        a.add_patch(mpatches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.5))
+        for j in range(len(cf)):
+            if cf[j] >= 0.25: a.add_patch(mpatches.Rectangle((xy[j][0], xy[j][1]), xy[j][2]-xy[j][0], xy[j][3]-xy[j][1], fill=False, edgecolor='red', lw=1))
+        a.set_title(f'{nm[:12]} top{top:.2f}', fontsize=8)
+    fig.suptitle(title); plt.tight_layout(); plt.savefig(path, dpi=90, bbox_inches='tight'); plt.show(); print('  →', path)
+
+print('\n[놓친 합성 top<0.25] 초록=붙인 불꽃 위치 · 빨강=검출박스')
+draw(miss_items, 'AIHub feather_B 놓침 (다크헤일로? 흐린불꽃?)', f'{OUT}/aihub_missed.png')
+print('[잡은 합성]')
+draw(hit_items, 'AIHub feather_B 검출', f'{OUT}/aihub_hit.png')
+print('\n※ 판정: lumfade/colormask ≫ feather_B(0.775) → (b) 다크헤일로가 주범(불꽃 멀쩡) · 비슷 → (a) 불꽃 자체 약함.')
