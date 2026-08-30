@@ -1,5 +1,13 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
+## ▶▶▶▶ 재개(2026-08-30) — 지금 할 일 = CELL 32 실행
+**한 줄 상태**: 불꽃 합성 *방법론* ablation 실험 진행 중. GATE 통과·VFX뱅크(26장면)·NIST뱅크(2장면)·배경마킹(18) 다 완료. **`docs/synth_sweep_cells.py` CELL 32(본실험 ablation) 작성완료·미실행.**
+1. **다음 액션 = 사용자가 Colab에서 CELL 32 실행** → 표(src×scale×level: recall/tp_conf/synth_FP) 붙이면 → 분석.
+2. **읽을 것**: `over_ctx` vs `screen_ctx`(screen washout 다배경 확정) · `over_rand` vs `over_ctx`(★발견2=밝은 조리면 배치가 base엔 더 어렵다=도메인갭·다배경 확정) · 스필(additive) · scale64/128/256 · VFX vs NIST(경향).
+3. **설계 근거**: `docs/SYNTH_METHOD_EVIDENCE.md`. **핵심 사실**: base 블렌딩=over(screen 기각·bright washout). 장면단위 집계. VFX=CC0 검은배경 luma-key. NIST=조리유 앵커 n=2.
+4. **콜드 재연결**: Drive 데이터(vfx_bank·nist_bank·placement.json·base) 생존 → CELL 32 하나만 실행(자립형). 상세=아래 ▶▶▶ 2026-08-30 최신.
+5. **주의**: [[no-premature-conclusions]]·[[no-running-ahead-verify-first]] — 측정 전 예단 금지·한 변수씩·애매하면 원본 확대 검증(내 실수를 이렇게 잡음).
+
 **상태(2026-08-29): 1·2 완료 · 3 우회 · 4번(합성 *방법론*) — 스케일·열화 sweep + 합성유발 FP 완료(§step4 sweep) = step4 사실상 종결. AI-Hub 보류(다운로드 불완전). 남은 프런티어=실 양성 데이터 확보(막힌 (b)/배포).** (파이프라인 6단계 = §프로젝트 파이프라인.)
 
 ## ▶▶▶ 2026-08-30 최신 — 불꽃 합성 방법론 ablation 설계 확정 (VFX-pivot)
@@ -31,7 +39,9 @@
     - **spill=판정불가**(0.595 vs 0.471·방향갈림·n=2). "중립" 아님.
   - **★본실험 전 코드수정 4**: (1)spill글로우=additive(blend분리) (2)FP=0-c 배경FP집합 먼저→합성서 IoU높은것 제외 (3)랜덤위치 다중시드 (4)**NIST 매트 파일화(nist_bank·VFX와 동형식)** — 즉석추출이면 SOURCE 비교 오염.
   - **설계 확정**: base 블렌딩=**over**(screen=문서화된 기각방법·bg00). 계단 over_rand→over_ctx→over_ctx_spill + over_ctx/screen_ctx 다배경 비교. 18배경·scale64/128/256·장면집계.
-  - **현 위치=NIST 매트 뱅크 셀 실행 직후 → 본실험 ablation 셀 작성.**
+  - **NIST 매트 뱅크 완성(2026-08-30)**: `nist_bank` 8매트·4이벤트 → **쓸만한 2장면**(alumipan2·calphalon peak·256px가능). ign(50~57px)=64px에도 업스케일→제외. massloss=금속리그+수평화염→제외. NIST 유효=2장면(조리유 앵커·경향만).
+  - **★본실험 셀 = `synth_sweep_cells.py` CELL 32 작성완료(커밋 407ceed)·미실행**: over base + 수정4(additive스필·0-c FP·다중시드·NIST파일뱅크) · 조건0a_hard + 계단 over_rand→over_ctx→over_ctx_spill + screen_ctx · SCALE64/128/256×SOURCE(VFX26/NIST2)×18배경 · 장면집계 · recall/tp_conf/synth_FP. 런타임 ~5-10분.
+  - **★★현 위치 = CELL 32 실행 대기(사용자가 Colab서 실행 → 표 보고 → 분석).** 읽을것: over_ctx vs screen_ctx(washout 다배경 확정)·over_rand vs over_ctx(발견2 확정)·스필·scale·VFX vs NIST.
 
 
 ## ▶▶▶ step4 sweep 결과 요약 (2026-08-29 · 셀=`docs/synth_sweep_cells.py` · 상세=PREREGISTER §step4 sweep)
