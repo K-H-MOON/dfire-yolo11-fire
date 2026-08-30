@@ -15,9 +15,10 @@
 - **도구**: `scripts/mark_placement.py`(배경 불배치 마킹)·`scripts/manual_flame_box.py`(불꽃 박싱)·`scripts/vfx_extract.py`(VFX 프레임추출+luma-key 알파+QC·영상/이미지 둘다)·`docs/synth_sweep_cells.py` CELL29(AIHub vs NIST recall)·CELL30(추출 원인분리).
 - **★Phase1 GATE — 완전 검증 통과(2026-08-30)**:
   - pHash 겹침 0건(NIST14+AIHub16 vs D-Fire 21,522·최소 Hamming 10~17>임계6·6~10 빈구간=무중복 신호) ✅ · 육안 몽타주(`synth_sweep/gate_phash_montage.png`) 최근접도 다른장면 ✅.
-  - **positive control 통과**: 변형(JPEG40+밝기+리사이즈) D-Fire 5장 자기인식 self Hamming 0~2 = pHash 견고·파이프라인 정상 ✅. (AoF04305 "❌"는 D-Fire 내부중복 AoF07786≡AoF04305[both H0]에 동점정렬 걸린 판정기준 오탐 — 실질 5/5. 덤: D-Fire 내부중복 존재, 알려진 dedup 21,522→10,624와 정합.)
-  - **0-b recall 재현 통과**: 프리즈 base로 gen 351장 추론 → **이미지 recall@0.25 = 0.809 = 기록 0.809 정확 일치**(박스 recall@IoU0.5 0.675) → 0-b 기준선 유효 ✅.
-  - 21,522 vs 논문 21,527: 해싱 스킵 0(글롭 전체 해시) → 차이는 Roboflow export측(우리 무손실).
+  - **positive control 통과(5/5)**: 변형(JPEG40+밝기+리사이즈) D-Fire 5장 자기인식 self Hamming 0~2 = pHash 견고·파이프라인 정상 ✅. **파이프라인이 진짜 near-dup을 H0로 검출함이 실증 → NIST/AIHub 최소 H10은 "도구 무능"이 아니라 진짜 무겹침**(positive control 없었으면 이 구분 불가). (AoF04305 "❌"는 삼각부등식상 AoF07786≡AoF04305[both H0]=D-Fire 내부중복쌍에 동점정렬 걸린 판정기준 아티팩트 — 실질 5/5.)
+  - **★D-Fire 내부중복 확인(덤)**: AoF04305≡AoF07786 등 · 알려진 dedup 21,522→10,624와 정합. **GATE엔 무관**(질의=NIST/AIHub). 단 **base가 중복 많은 D-Fire로 학습됨 = 실효 다양성<명목** → **Phase B(학습) 해석 시 고려** 기록.
+  - **0-b recall 재현 통과**: 프리즈 base로 gen 351장 추론 → **이미지 recall@0.25 = 0.809 = 기록 0.809 소수셋째까지 일치**(라벨·설정 불변) → 0-b 기준선 유효 ✅. 박스 recall@IoU0.5 = 0.675. **이미지0.809 vs 박스0.675 격차 0.134 = 다불꽃 이미지서 일부만 검출 → Phase4서 두 지표 다 추적(조건별 격차 변화가 신호).**
+  - 21,522 vs 논문 21,527: **우리 해싱 스킵 0 확인**(글롭 전체 해시). 5장 차이 **원인 미확인**(Roboflow export or 원본)·영향 미미 — 조용한 드롭 단서로 남김.
   - 사각지대: 크롭-부분영역/동일사건-다른프레임 = pHash 배제 불가 → **출처 논리로 위험 낮음 *판단***(NIST=랩·AIHub=국내CCTV·D-Fire=브라질웹). "확인" 아니라 "판단"으로 기록.
   - **★NIST 장면ID(집계 단위)=화재이벤트 4개**: `1574199884`(alumipan2)·`1574198232`(calphalon)·`1508954077`(massloss13)·`1508958465`(massloss14c). ignition/peak=같은 이벤트. NIST 14프레임 → **집계는 이 4 scene 단위·n≤4·경향만**.
   - **현 위치=Phase2(VFX 파일럿) 직전.**
