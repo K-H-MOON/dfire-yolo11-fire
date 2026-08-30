@@ -1072,3 +1072,129 @@ draw(miss_items, 'AIHub feather_B 놓침 (다크헤일로? 흐린불꽃?)', f'{O
 print('[잡은 합성]')
 draw(hit_items, 'AIHub feather_B 검출', f'{OUT}/aihub_hit.png')
 print('\n※ 판정: lumfade/colormask ≫ feather_B(0.775) → (b) 다크헤일로가 주범(불꽃 멀쩡) · 비슷 → (a) 불꽃 자체 약함.')
+
+
+# ========== CELL 31 (DRY-RUN): ablation 관통 테스트 — 2소스 × 2배경 × L1-L4 (scale 128) ==========
+# 조언자 권고: 전체 24셀 전에 파이프라인·GT기록·집계·합성함수를 소규모로 관통 검증.
+#   계단 L1(over·랜덤위치)→L2(→screen·랜덤)→L3(screen·컨텍스트배치)→L4(+스필). scale 128px 고정(dry-run).
+#   페어링: L1↔L2 같은 랜덤점(블렌딩만). L3↔L4 같은 컨텍스트점(스필만). L2→L3은 위치=조작변수.
+#   접지선 anchor_frac 정렬 · GT=불꽃 알파 bbox(스필 제외·고정) · 지표=tp_conf/fp_conf. 몽타주로 육안 버그체크.
+import os, glob, csv, subprocess, sys, json, unicodedata
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib.pyplot as plt, matplotlib.patches as mpatches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR = '/content/drive/MyDrive'; FSRC = f'{DR}/firecrop_src'
+W = f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt'
+BG_ROOT = f'{DR}/realneg_frames/synth'
+VFX = f'{FSRC}/vfx_bank'; NIST = f'{FSRC}/nist_stovetop_cornoil'; OUT = f'{DR}/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+KEEP_NIST = ['1574198232-EvtP', '1574199884-EvtP']   # calphalon·alumipan2 peak (256px 가능)
+SCALE = 128; CONFS = (0.05, 0.25, 0.50)
+
+def screen(a, b): return 255.0 - (255.0-a)*(255.0-b)/255.0
+def ropen(p):
+    for q in (p, unicodedata.normalize('NFC', p), unicodedata.normalize('NFD', p)):
+        try: return Image.open(q).convert('RGB')
+        except Exception: pass
+    return None
+def nist_extract(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R+0.587*G+0.114*B
+    mask = ((R > B+30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    mm = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(mm); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad); x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; m2 = mm[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return np.dstack([crop, np.clip(l/160., 0, 1)*m2*255]).astype(np.uint8)
+def core_lum(rgba):
+    a = rgba[..., 3]/255.; lum = 0.299*rgba[...,0]+0.587*rgba[...,1]+0.114*rgba[...,2]; m = a > 0.5
+    return float(np.percentile(lum[m], 98)) if m.any() else 200.0
+def composite(bg_pil, flame, point, scale_px, anchor_frac, blend='screen', spill=True):
+    bg = np.asarray(bg_pil).astype(np.float32); H, Wd = bg.shape[:2]
+    fr = Image.fromarray(flame, 'RGBA'); tw = max(1, int(fr.width*scale_px/fr.height))
+    flr = np.asarray(fr.resize((tw, scale_px))).astype(np.float32); fh, fw = flr.shape[:2]
+    ax = fw//2; ay = int(anchor_frac*(fh-1)); px = int(point[0]-ax); py = int(point[1]-ay)
+    cx, cy = px+fw//2, py+fh//2; out = bg.copy()
+    if spill:
+        yy, xx = np.mgrid[0:H, 0:Wd]; d2 = (xx-cx)**2 + (yy-cy)**2; r0 = fh*0.3
+        inten = (core_lum(flame)/255.)*(r0*r0/(d2+r0*r0))*0.7            # 코어휘도∝·역제곱(코어반경 clamp)
+        out = screen(out, np.dstack([inten*255, inten*140, inten*40]).astype(np.float32))
+    x0c, y0c = max(0, px), max(0, py); xe = min(Wd, px+fw); ye = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = xe-x0c, ye-y0c; A = np.zeros((H, Wd), np.float32)
+    if rw > 0 and rh > 0:
+        reg = flr[fy0:fy0+rh, fx0:fx0+rw]; al = reg[..., 3:4]/255.; rgb = reg[..., :3]
+        dst = out[y0c:y0c+rh, x0c:x0c+rw]
+        blended = screen(dst, rgb) if blend == 'screen' else rgb
+        out[y0c:y0c+rh, x0c:x0c+rw] = dst*(1-al) + blended*al
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    gt = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), gt
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih; ua = (a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter
+    return inter/ua if ua > 0 else 0.0
+def detect(m, pil, gt):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return 0., 0., []
+    xy = r.boxes.xyxy.cpu().numpy(); cf = r.boxes.conf.cpu().numpy()
+    tp = max([cf[i] for i in range(len(cf)) if gt and iou(xy[i], gt) >= 0.5] + [0.])
+    fp = max([cf[i] for i in range(len(cf)) if (not gt) or iou(xy[i], gt) < 0.3] + [0.])
+    return tp, fp, list(zip(xy.tolist(), cf.tolist()))
+
+BG_MAN = json.load(open(f'{FSRC}/manifest.json'))        # bgNN.jpg → rel path
+PLACE  = json.load(open(f'{FSRC}/placement.json'))       # bgNN.jpg → [x1,y1,x2,y2]
+bg_names = sorted(PLACE.keys())[:2]
+vrows = list(csv.DictReader(open(f'{VFX}/manifest.csv')))
+vp = [r for r in vrows if r['orientation'] == 'vertical'][0]
+vfx_flame = np.asarray(Image.open(f'{VFX}/{vp["matte"]}').convert('RGBA')); vfx_anchor = float(vp['anchor_frac'])
+nfiles = [p for p in sorted(glob.glob(f'{NIST}/*FIRE*.jpg')) if any(k in os.path.basename(p) for k in KEEP_NIST)]
+nist_flame = nist_extract(nfiles[0]); nist_anchor = 1.0
+sources = [('VFX', vp['scene_id'], vfx_flame, vfx_anchor), ('NIST', 'peak', nist_flame, nist_anchor)]
+print(f'소스: VFX {vp["matte"][:20]}(anchor {vfx_anchor}) · NIST {os.path.basename(nfiles[0])[:24]}')
+print(f'배경: {bg_names}')
+
+m = YOLO(W)
+LEVELS = [('L1_over_rand','over',False,'random'), ('L2_screen_rand','screen',False,'random'),
+          ('L3_screen_ctx','screen',False,'context'), ('L4_screen_ctx_spill','screen',True,'context')]
+rng = np.random.default_rng(0); results = []; montage = []
+for bgname in bg_names:
+    bg = ropen(f'{BG_ROOT}/{BG_MAN[bgname]}')
+    if bg is None: print(f'[skip] 배경 못열음 {bgname}'); continue
+    Wd, Hd = bg.size; box = PLACE[bgname]
+    ctx = ((box[0]+box[2])//2, box[3])                                  # 컨텍스트=박스 하단중앙(조리표면)
+    rpt = (int(rng.uniform(0.2, 0.8)*Wd), int(rng.uniform(0.4, 0.7)*Hd))
+    for sname, scene, flame, anchor in sources:
+        for lname, blend, spill, pos in LEVELS:
+            point = ctx if pos == 'context' else rpt
+            comp, gt = composite(bg, flame, point, SCALE, anchor, blend, spill)
+            tp, fp, dets = detect(m, comp, gt)
+            results.append((sname, bgname, lname, tp, fp, gt is not None))
+            if len(montage) < 16: montage.append((comp, gt, dets, f'{sname} {bgname[:5]} {lname}'))
+
+print(f'\n{"src":5}{"bg":8}{"level":22}{"tp_conf":>8}{"fp_conf":>8}{"gt":>4}')
+for sname, bgname, lname, tp, fp, hasgt in results:
+    print(f'{sname:5}{bgname:8}{lname:22}{tp:>8.3f}{fp:>8.3f}{"Y" if hasgt else "N":>4}')
+
+K = len(montage); cols = 4; rr = (K+cols-1)//cols
+fig, ax = plt.subplots(rr, cols, figsize=(5*cols, 3.0*rr)); ax = np.array(ax).reshape(rr, cols)
+for i in range(rr*cols):
+    a = ax[i//cols, i%cols]; a.axis('off')
+    if i >= K: continue
+    comp, gt, dets, lab = montage[i]; a.imshow(comp)
+    if gt: a.add_patch(mpatches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=2))
+    for xy, cf in dets:
+        if cf >= 0.25: a.add_patch(mpatches.Rectangle((xy[0], xy[1]), xy[2]-xy[0], xy[3]-xy[1], fill=False, edgecolor='red', lw=1))
+    a.set_title(lab, fontsize=8)
+fig.suptitle('CELL31 DRY-RUN: 초록=GT불꽃 · 빨강=base검출(conf>=0.25)')
+plt.tight_layout(); plt.savefig(f'{OUT}/dryrun_montage.png', dpi=85, bbox_inches='tight'); plt.show()
+print('\n몽타주:', f'{OUT}/dryrun_montage.png')
+print('※ 버그체크: (1)L3/L4 불꽃이 박스하단(조리면)에 앉았나 (2)L1 over→L2 screen 밝아짐 (3)L4 스필 글로우 (4)GT초록=불꽃만(스필 제외)')
