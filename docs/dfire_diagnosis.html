@@ -397,10 +397,47 @@
     </div>
   </section>
 
-  <!-- 05 정정 -->
+  <!-- 05 견고성 -->
   <section>
     <div class="whead col">
-      <p class="eyebrow"><span class="snum">05</span> 정정의 연속</p>
+      <p class="eyebrow"><span class="snum">05</span> 견고성</p>
+      <h2>무너뜨리는 건 노이즈가 아니라 조명이다</h2>
+      <p class="lead" style="font-size:1rem; margin-top:.6rem">앞 절의 "base는 밝은 코어에 반응한다"를 독립적으로 시험했다. 같은 @64 합성에 CCTV 열화를 하나씩 걸었더니, 열화는 <em class="term">균일하지 않았다</em>.</p>
+    </div>
+
+    <div class="col">
+      <p>기준(무열화) <span class="num">0.165</span>에서, 밝은 코어 대비를 파괴하는 <strong>조명 극단</strong>만 검출을 무너뜨렸다 — 저조도 <span class="num">0.053</span>(−68%) · 과노출 <span class="num">0.062</span>(−62%). 반대로 <strong>센서 노이즈는 거의 그대로</strong>였다(가우스 <span class="num">0.152</span> · −8%). JPEG q8(<span class="num">0.085</span> · −48%)은 @64에서 앞선 크기 sweep(CELL 25)의 재확인이다.</p>
+    </div>
+
+    <div class="chart col">
+      <div class="ctitle">CCTV 열화별 검출 — VFX over_ctx @64 · 막대 폭 = rec@IoU0.5 (0–0.18 구간)</div>
+      <div class="legend">
+        <span><span class="sw d"></span>견고 (노이즈)</span>
+        <span><span class="sw e"></span>조명 극단 = killer</span>
+      </div>
+      <div class="grp">
+        <div class="bar"><span class="blab">기준 none</span><span class="track"><span class="fill m" style="width:91.7%"></span></span><span class="bval">0.165</span></div>
+        <div class="bar"><span class="blab">가우스</span><span class="track"><span class="fill d" style="width:84.4%"></span></span><span class="bval">0.152</span></div>
+        <div class="bar"><span class="blab">모션블러</span><span class="track"><span class="fill m" style="width:63.9%"></span></span><span class="bval">0.115</span></div>
+        <div class="bar"><span class="blab">JPEG q8</span><span class="track"><span class="fill m" style="width:47.2%"></span></span><span class="bval">0.085</span></div>
+        <div class="bar"><span class="blab">과노출</span><span class="track"><span class="fill e" style="width:34.4%"></span></span><span class="bval">0.062</span></div>
+        <div class="bar"><span class="blab">저조도</span><span class="track"><span class="fill e" style="width:29.4%"></span></span><span class="bval">0.053</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <p><strong>귀속이 깔끔하다.</strong> 노이즈만 얹은 가우스는 견고하고, 노출만 흔든 과노출은 붕괴한다 — 그러니 붕괴 원인은 <em class="term">노이즈가 아니라 조도/노출</em>이다. 저조도는 코어를 어둡게, 과노출은 배경을 희게 만들어 <strong>둘 다 밝은 코어 대비를 지운다</strong>. 밝은 픽셀이 적은 소형일수록 심하다(전 열화가 스케일 역순). §04의 기전이 예측한 그대로다.</p>
+      <div class="frame">
+        <span class="k">운영 함의</span>
+        조기(소형) 검출이 목표라면 <strong>CCTV 조명·노출 관리가 압축·노이즈 대책보다 우선</strong>이다. 단 이것은 프리즈 인식률의 <em class="term">견고성</em>이지 "이 열화로 학습하면 낫다"가 아니고(그건 (B)), 각 열화는 단일 강도만 쟀다(dose–response 미측정 · NIST n=2 경향).
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 정정 -->
+  <section>
+    <div class="whead col">
+      <p class="eyebrow"><span class="snum">06</span> 정정의 연속</p>
       <h2>이 결론은 어떻게 섰나 — 매 판정을 검증이 되돌렸다</h2>
       <p class="lead" style="font-size:1rem; margin-top:.6rem">결론은 한 번에 서지 않았다. 초기 판정마다 과대였고, 원자료·재집계·육안이 매번 정정했다. 이 되돌림 자체가 결과의 신뢰 근거다.</p>
     </div>
@@ -430,11 +467,11 @@
     </div>
   </section>
 
-  <!-- 06 -->
+  <!-- 07 -->
   <section>
     <div class="col">
       <div class="whead">
-        <p class="eyebrow"><span class="snum">06</span> 한계와 정직</p>
+        <p class="eyebrow"><span class="snum">07</span> 한계와 정직</p>
         <h2>이 수치가 말하지 않는 것</h2>
       </div>
       <div class="limits">
@@ -451,7 +488,7 @@
 
 <footer class="wrap">
   <div class="col">
-    <p class="fnote"><strong>검증.</strong> 레버·진단 수치 전량은 저장된 원자료(ablation_rows.json)를 재집계해 확인했다 — 재추론 0. 재실행이 필요했던 rec@IoU0.1·GT 임계 스윕은 sanity 게이트(GT&gt;0.1 열이 원 rec@0.5를 재현)를 통과했다. 컴포지팅 vs 생성 <strong>비교 수치</strong>(우리 0.915 · 0-b 박스 0.675/0.669)는 미검증이라 제외 — 출발점은 숫자 없이 맥락으로만.</p>
+    <p class="fnote"><strong>검증.</strong> 레버·진단 수치 전량은 저장된 원자료(ablation_rows.json)를 재집계해 확인했다 — 재추론 0. 재실행이 필요했던 rec@IoU0.1·GT 임계 스윕은 sanity 게이트(GT&gt;0.1 열이 원 rec@0.5를 재현)를 통과했다. <strong>07 견고성</strong>의 열화 수치는 aug 실행(ablation_aug.json)에서 나왔고 같은 sanity 게이트(무열화 @64가 원 0.165 재현)를 통과했다. 컴포지팅 vs 생성 <strong>비교 수치</strong>(우리 0.915 · 0-b 박스 0.675/0.669)는 미검증이라 제외 — 출발점은 숫자 없이 맥락으로만.</p>
   </div>
 </footer>
 
