@@ -1,0 +1,454 @@
+<title>낮은 recall의 정체</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&family=Noto+Serif+KR:wght@600;700&display=swap">
+
+<script>
+  // 3-state theme init (avoid flash): read stored choice before paint
+  try {
+    var t = localStorage.getItem('dfire-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+</script>
+
+<style>
+  :root{
+    --bg:#F5F4F0; --surface:#FFFFFF; --surface-2:#FBFAF7; --sink:#EEECE5;
+    --ink:#1C1815; --muted:#6B6459; --faint:#948C7F;
+    --line:#E5E1D9; --line-strong:#D5CFC4;
+    --ember:#B23A12; --ember-tint:#F0DDD1; --ember-line:#E4B79E;
+    --detect:#2E6E5E; --detect-tint:#D8E7E0;
+    --limit:#8C5A16; --limit-bg:#F4EAD7; --limit-line:#E4D2AF;
+    --shadow:0 1px 2px rgba(28,24,21,.04), 0 8px 24px -12px rgba(28,24,21,.10);
+    --track:#EBE8E0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#16130F; --surface:#1F1B15; --surface-2:#241F18; --sink:#120F0B;
+      --ink:#ECE7DE; --muted:#A69E90; --faint:#7C7565;
+      --line:#322C23; --line-strong:#443C30;
+      --ember:#E9743C; --ember-tint:#3A281C; --ember-line:#603A22;
+      --detect:#6FB59E; --detect-tint:#1E2E29;
+      --limit:#D8A24E; --limit-bg:#2A2113; --limit-line:#4A3A1E;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+      --track:#2A2419;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#16130F; --surface:#1F1B15; --surface-2:#241F18; --sink:#120F0B;
+    --ink:#ECE7DE; --muted:#A69E90; --faint:#7C7565;
+    --line:#322C23; --line-strong:#443C30;
+    --ember:#E9743C; --ember-tint:#3A281C; --ember-line:#603A22;
+    --detect:#6FB59E; --detect-tint:#1E2E29;
+    --limit:#D8A24E; --limit-bg:#2A2113; --limit-line:#4A3A1E;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.6);
+    --track:#2A2419;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans KR", system-ui, sans-serif;
+    font-size:17px; line-height:1.72; font-weight:400;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .wrap{max-width:912px; margin:0 auto; padding:0 24px}
+  .col{max-width:720px}
+
+  /* ---- type ---- */
+  .eyebrow{
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem; font-weight:500;
+    letter-spacing:.14em; text-transform:uppercase; color:var(--ember);
+    display:flex; align-items:center; gap:.6em; margin:0 0 1.1rem;
+  }
+  .eyebrow::before{content:""; width:1.9rem; height:1px; background:var(--ember); opacity:.55}
+  h1{
+    font-family:"Noto Serif KR", serif; font-weight:700;
+    font-size:clamp(2.05rem, 1.2rem + 3.4vw, 3.15rem); line-height:1.16;
+    letter-spacing:-.01em; margin:0; text-wrap:balance; color:var(--ink);
+  }
+  h1 .hl{color:var(--ember)}
+  h2{
+    font-family:"IBM Plex Sans KR", sans-serif; font-weight:600;
+    font-size:clamp(1.35rem, 1.1rem + .9vw, 1.72rem); line-height:1.28;
+    letter-spacing:-.005em; margin:0 0 .2rem; text-wrap:balance;
+  }
+  h3{font-size:1.02rem; font-weight:600; margin:0 0 .4rem; letter-spacing:.005em}
+  p{margin:0 0 1.05rem}
+  strong{font-weight:600; color:var(--ink)}
+  .lead{font-size:1.12rem; color:var(--muted); line-height:1.68}
+  .num{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
+  em.term{font-style:normal; color:var(--ember); font-weight:500}
+  a{color:var(--ember)}
+
+  /* ---- hero ---- */
+  .hero{padding:clamp(3.4rem,8vw,6rem) 0 2.6rem; border-bottom:1px solid var(--line)}
+  .hero .dek{max-width:640px; margin-top:1.4rem}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:.5rem; margin-top:2.1rem;
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.76rem; letter-spacing:.02em;
+  }
+  .chip{
+    display:inline-flex; align-items:center; gap:.5em;
+    padding:.42em .8em; border:1px solid var(--line-strong); border-radius:2px;
+    background:var(--surface-2); color:var(--muted); white-space:nowrap;
+  }
+  .chip.ok{color:var(--detect); border-color:var(--detect); background:var(--detect-tint)}
+  .chip .dot{width:.42em; height:.42em; border-radius:50%; background:var(--faint)}
+  .chip.ok .dot{background:var(--detect)}
+
+  /* ---- sections ---- */
+  section{padding:clamp(3rem,6vw,4.6rem) 0; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:0}
+  .snum{
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem; font-weight:500;
+    letter-spacing:.14em; color:var(--faint);
+  }
+  .whead{margin-bottom:1.9rem}
+
+  /* ---- callouts ---- */
+  .frame{
+    border-left:2px solid var(--ember); background:var(--ember-tint);
+    padding:1rem 1.2rem; border-radius:0 3px 3px 0; margin:1.4rem 0;
+    font-size:.98rem; color:var(--ink);
+  }
+  .frame .k{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; color:var(--ember); display:block; margin-bottom:.35rem}
+  .key{
+    background:var(--surface); border:1px solid var(--line-strong); border-top:3px solid var(--ember);
+    border-radius:3px; padding:1.3rem 1.4rem; margin:1.8rem 0; box-shadow:var(--shadow);
+  }
+  .key .k{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; color:var(--ember); display:block; margin-bottom:.5rem}
+  .key p:last-child{margin-bottom:0}
+
+  /* ---- data table ---- */
+  .tbl-wrap{overflow-x:auto; margin:1.6rem 0 .8rem; border:1px solid var(--line); border-radius:4px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; min-width:520px; font-size:.9rem}
+  caption{caption-side:top; text-align:left; padding:.9rem 1rem .1rem; font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem; letter-spacing:.06em; color:var(--muted)}
+  thead th{
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-weight:500; font-size:.74rem;
+    letter-spacing:.04em; text-transform:uppercase; color:var(--muted);
+    text-align:right; padding:.75rem 1rem; border-bottom:1px solid var(--line-strong);
+    background:var(--surface-2);
+  }
+  thead th:first-child{text-align:left}
+  tbody td{padding:.62rem 1rem; border-bottom:1px solid var(--line); text-align:right;
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-variant-numeric:tabular-nums}
+  tbody td:first-child{text-align:left; font-family:"IBM Plex Sans KR",sans-serif; color:var(--ink); font-weight:500; white-space:nowrap}
+  tbody tr:last-child td{border-bottom:0}
+  tr.hi td{background:var(--ember-tint)}
+  tr.hi td:first-child{color:var(--ember)}
+  td.pop{color:var(--ember); font-weight:600}
+  td.dim{color:var(--faint)}
+  .rowtag{font-family:"IBM Plex Sans KR",sans-serif; font-size:.72rem; color:var(--muted); font-weight:400; display:block; margin-top:.1rem}
+
+  /* ---- bar charts ---- */
+  .chart{margin:1.8rem 0 .6rem; background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:1.3rem 1.4rem}
+  .chart .ctitle{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.73rem; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-bottom:1.1rem}
+  .legend{display:flex; gap:1.2rem; flex-wrap:wrap; margin-bottom:1.1rem; font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.75rem; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:.5em}
+  .sw{width:.85em; height:.85em; border-radius:2px; flex:none}
+  .sw.e{background:var(--ember)} .sw.d{background:var(--detect)} .sw.g{background:var(--track); border:1px solid var(--line-strong)}
+
+  .grp{margin-bottom:1.15rem}
+  .grp:last-child{margin-bottom:0}
+  .grp .glab{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.78rem; color:var(--ink); margin-bottom:.4rem; display:flex; justify-content:space-between}
+  .grp .glab .gnote{color:var(--faint); font-size:.72rem}
+  .bar{display:flex; align-items:center; gap:.7rem; margin:.32rem 0}
+  .bar .blab{width:5.7rem; flex:none; font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem; color:var(--muted); text-align:right}
+  .track{flex:1; height:.82rem; background:var(--track); border-radius:2px; overflow:hidden; position:relative}
+  .fill{height:100%; border-radius:2px}
+  .fill.e{background:var(--ember)} .fill.d{background:var(--detect)} .fill.m{background:var(--line-strong)}
+  .bar .bval{width:3rem; flex:none; font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-variant-numeric:tabular-nums; font-size:.78rem; color:var(--ink)}
+
+  /* ---- limitations ---- */
+  .limits{background:var(--limit-bg); border:1px solid var(--limit-line); border-radius:4px; padding:1.5rem 1.6rem}
+  .limits h3{color:var(--limit)}
+  .limits .li{display:flex; gap:.9rem; padding:.8rem 0; border-top:1px solid var(--limit-line)}
+  .limits .li:first-of-type{border-top:0; padding-top:.3rem}
+  .limits .li .lk{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; color:var(--limit); flex:none; width:5.2rem; padding-top:.15rem}
+  .limits .li p{margin:0; font-size:.96rem}
+
+  ul.clean{list-style:none; padding:0; margin:1.2rem 0}
+  ul.clean li{padding:.55rem 0 .55rem 1.5rem; position:relative; border-bottom:1px solid var(--line)}
+  ul.clean li:last-child{border-bottom:0}
+  ul.clean li::before{content:""; position:absolute; left:0; top:1.35rem; width:.55rem; height:.55rem; border-radius:1px; background:var(--ember)}
+  ul.clean li.null::before{background:var(--faint); border-radius:50%}
+  ul.clean li.cond::before{background:var(--detect)}
+  ul.clean .lt{font-weight:600}
+
+  .tag{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.6rem; letter-spacing:.03em;
+    color:var(--detect); border:1px solid var(--detect); border-radius:2px; padding:.12em .4em;
+    margin-left:.45em; vertical-align:.12em; white-space:nowrap; background:var(--detect-tint)}
+
+  ol.corr{list-style:none; counter-reset:c; padding:0; margin:1.5rem 0 .5rem; display:flex; flex-direction:column; gap:1rem}
+  ol.corr li{background:var(--surface); border:1px solid var(--line); border-left:2px solid var(--detect);
+    border-radius:0 4px 4px 0; padding:1rem 1.2rem 1rem 3.1rem; position:relative}
+  ol.corr li::before{counter-increment:c; content:counter(c); position:absolute; left:1.15rem; top:.95rem;
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.82rem; color:var(--faint)}
+  ol.corr .was{margin:0 0 .45rem; color:var(--muted); font-size:.94rem;
+    text-decoration:line-through; text-decoration-color:var(--ember); text-decoration-thickness:1.5px}
+  ol.corr .now{margin:0 0 .5rem; color:var(--ink); font-weight:500}
+  ol.corr .now::before{content:"→ "; color:var(--ember); font-weight:600}
+  ol.corr .ev{margin:0; font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.72rem;
+    letter-spacing:.02em; color:var(--detect); font-variant-numeric:tabular-nums}
+
+  /* ---- footer ---- */
+  footer{padding:2.6rem 0 4rem; color:var(--muted); font-size:.86rem}
+  footer .fnote{font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.76rem; line-height:1.7; color:var(--faint)}
+  footer .fnote strong{color:var(--muted); font-weight:500}
+
+  /* ---- theme toggle ---- */
+  .toggle{
+    position:fixed; top:16px; right:16px; z-index:10;
+    font-family:"IBM Plex Mono", "IBM Plex Sans KR", monospace; font-size:.7rem; letter-spacing:.05em;
+    background:var(--surface); color:var(--muted); border:1px solid var(--line-strong);
+    border-radius:2px; padding:.5em .75em; cursor:pointer; box-shadow:var(--shadow);
+  }
+  .toggle:hover{color:var(--ember); border-color:var(--ember)}
+
+  a:focus-visible, button:focus-visible{outline:2px solid var(--ember); outline-offset:2px; border-radius:2px}
+
+  .reveal{opacity:0; transform:translateY(10px); animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes rise{to{opacity:1; transform:none}}
+  @media (prefers-reduced-motion: reduce){
+    .reveal{animation:none; opacity:1; transform:none}
+    *{scroll-behavior:auto !important}
+  }
+  @media (max-width:560px){
+    body{font-size:16px}
+    .bar .blab{width:4.6rem}
+  }
+</style>
+
+<button class="toggle" id="themeBtn" aria-label="라이트/다크 전환">THEME</button>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="reveal">
+      <p class="eyebrow">Ablation (A) · 프리즈 D-Fire YOLO11s · 급식실 합성 화재</p>
+      <h1>낮은 recall은 검출기의 결함이 아니라 <span class="hl">측정 설정</span>이었다</h1>
+      <p class="lead dek">합성 방법의 효과 범위를 가려내고, 병목이 base가 아니라 우리 쪽 — GT 컨벤션과 실효 크기 — 임을 규명한 진단. 모든 수치는 저장된 원자료를 재집계해 검증했다(재추론 0).</p>
+      <div class="meta">
+        <span class="chip"><span class="dot"></span>5 조건 × 3 스케일 × 18 배경</span>
+        <span class="chip"><span class="dot"></span>장면집계 n=26</span>
+        <span class="chip"><span class="dot"></span>rec@IoU0.5 · conf 0.25</span>
+        <span class="chip ok"><span class="dot"></span>sanity 게이트 통과</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- 01 -->
+  <section>
+    <div class="col">
+      <div class="whead">
+        <p class="eyebrow"><span class="snum">01</span> 문제</p>
+        <h2>인식하는가, 그리고 어떻게 개선하나</h2>
+      </div>
+      <p>이 실험은 <strong>생성 모델로 만든</strong> 합성 화재 이미지로 base를 테스트하는 데서 출발했다 — 거기서 이미지 recall <span class="num">0.809</span><span class="tag">생성셋 · 검증됨</span>. "더 나은 합성 방법이 있는가"가 열린 질문이었고, 그래서 컴포지팅 합성 방법들을 계단식으로 쟀다. <span style="color:var(--faint); font-size:.9rem">(이 값은 생성셋·이미지 recall이라, 아래 ablation의 박스 지표와 직접 비교하지 않는다.)</span></p>
+      <p>D-Fire로 학습한 YOLO11s(정직 mAP50 <span class="num">0.660</span> · recall 천장 <span class="num">0.894</span>)를 급식실 합성 화재에 테스트한다. 질문은 둘 — 프리즈 base가 합성 불꽃을 <strong>인식</strong>하는가, 그리고 인식률을 올리려면 어떤 <strong>합성 방법</strong>이 효과 있나.</p>
+      <div class="frame">
+        <span class="k">측정 프레임</span>
+        base는 재학습하지 않는다. 이 실험이 재는 것은 <em class="term">"학습된 검출기가 합성을 인식하는 정도"</em>(프록시)이지, "이렇게 학습하면 실화재 검출이 좋아지나"가 아니다. 이 구분이 뒤의 모든 판정을 좌우한다.
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section>
+    <div class="col">
+      <div class="whead">
+        <p class="eyebrow"><span class="snum">02</span> 인식한다</p>
+        <h2>인식 여부는 문제가 아니었다</h2>
+      </div>
+      <p>충분한 크기에선 인식한다. 최대 스케일(@256)에서 검출 <span class="num">rec@IoU0.1 = 0.835</span>. 그러니 실제 질문은 "인식하나"가 아니라 <strong>무엇이 인식을 좌우하나</strong>, 그리고 <strong>낮게 나온 자리의 정체는 무엇인가</strong>였다.</p>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section>
+    <div class="whead col">
+      <p class="eyebrow"><span class="snum">03</span> 방법 레버</p>
+      <h2>무엇이 효과 있고, 무엇이 없나</h2>
+      <p class="lead" style="font-size:1rem; margin-top:.6rem">다섯 합성 조건을 세 스케일 × 18 배경에서 장면집계. 프리즈 base가 심판. 지표는 rec@IoU0.5(conf 0.25 · GT alpha&gt;0.1).</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>레버 표 — VFX · 장면집계 n=26 · rec@IoU0.5</caption>
+        <thead>
+          <tr><th>합성 조건</th><th>@64</th><th>@128</th><th>@256</th></tr>
+        </thead>
+        <tbody>
+          <tr class="hi"><td>over_ctx <span class="rowtag">기준 블렌딩</span></td><td>0.165</td><td>0.410</td><td>0.464</td></tr>
+          <tr><td>screen_ctx <span class="rowtag">washout</span></td><td class="dim">0.075</td><td class="dim">0.218</td><td class="dim">0.299</td></tr>
+          <tr><td>over_ctx_spill <span class="rowtag">반사광</span></td><td class="pop">0.218</td><td>0.391</td><td>0.466</td></tr>
+          <tr><td>over_rand <span class="rowtag">랜덤 배치</span></td><td>0.156</td><td>0.405</td><td>0.487</td></tr>
+          <tr><td>0a_hard <span class="rowtag">불투명 사각형</span></td><td class="dim">0.032</td><td>0.295</td><td>0.504</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="chart col">
+      <div class="ctitle">블렌딩 — over vs screen (rec@IoU0.5)</div>
+      <div class="grp">
+        <div class="glab"><span>@64</span><span class="gnote">1.55–2.20× · 스케일 역순</span></div>
+        <div class="bar"><span class="blab">over</span><span class="track"><span class="fill e" style="width:16.5%"></span></span><span class="bval">0.165</span></div>
+        <div class="bar"><span class="blab">screen</span><span class="track"><span class="fill m" style="width:7.5%"></span></span><span class="bval">0.075</span></div>
+      </div>
+      <div class="grp">
+        <div class="glab"><span>@128</span></div>
+        <div class="bar"><span class="blab">over</span><span class="track"><span class="fill e" style="width:41%"></span></span><span class="bval">0.410</span></div>
+        <div class="bar"><span class="blab">screen</span><span class="track"><span class="fill m" style="width:21.8%"></span></span><span class="bval">0.218</span></div>
+      </div>
+      <div class="grp">
+        <div class="glab"><span>@256</span></div>
+        <div class="bar"><span class="blab">over</span><span class="track"><span class="fill e" style="width:46.4%"></span></span><span class="bval">0.464</span></div>
+        <div class="bar"><span class="blab">screen</span><span class="track"><span class="fill m" style="width:29.9%"></span></span><span class="bval">0.299</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <ul class="clean">
+        <li><span class="lt">견고 · over ≫ screen.</span> 전 스케일에서 우세. 장면별 승/무/패 = @64 <span class="num">13/13/0</span> · @128 <span class="num">21/4/1</span> · @256 <span class="num">16/8/2</span> — 패배 거의 없음. (@64의 무승부 다수는 둘 다 0인 바닥효과이지 over가 약해서가 아니다.) screen은 밝은 배경에서 불꽃을 흰색으로 지운다 = 실제 검출 손실.</li>
+        <li class="cond"><span class="lt">조건부 · 스필 = 소형 검출 이득.</span> 반사광이 소형(@64) 검출을 올린다 — rec@IoU0.1 기준 VFX <span class="num">+0.135</span>, NIST <span class="num">+0.305</span>. 대형에선 손해. 병목 구간(소형)에 정확히 떨어지는 조건부 양성.</li>
+        <li class="null"><span class="lt">null · 배치.</span> 조리면 배치 ≈ 랜덤 배치(차이 ≤ <span class="num">0.023</span> · 부호 뒤집힘 = 노이즈).</li>
+        <li class="null"><span class="lt">null · 사실성.</span> 실촬영 유류불이 영화 불꽃보다 낫다는 가설 = 기각.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section>
+    <div class="whead col">
+      <p class="eyebrow"><span class="snum">04</span> 핵심 진단</p>
+      <h2>낮은 recall의 정체 = 두 개의 서로 다른 것</h2>
+      <p class="lead" style="font-size:1rem; margin-top:.6rem">검출(IoU≥0.1)과 위치(IoU≥0.5)를 나눠 보면, 낮은 recall이 스케일마다 <em class="term">전혀 다른 이유</em>로 낮다.</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <caption>진단 표 — VFX over_ctx · 검출 vs 위치 vs GT 임계</caption>
+        <thead>
+          <tr><th>스케일</th><th>위치 rec@.5</th><th>검출 rec@.1</th><th>GT&gt;.5</th><th>정체</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>@64 <span class="rowtag">실효 21px</span></td><td>0.165</td><td>0.173</td><td>0.165</td><td style="text-align:left; font-family:'IBM Plex Sans KR'; color:var(--muted); font-size:.82rem">검출 병목</td></tr>
+          <tr><td>@128 <span class="rowtag">실효 43px</span></td><td>0.410</td><td>0.592</td><td>0.530</td><td style="text-align:left; font-family:'IBM Plex Sans KR'; color:var(--faint); font-size:.82rem">전이</td></tr>
+          <tr class="hi"><td>@256 <span class="rowtag">실효 85px</span></td><td>0.464</td><td class="pop">0.835</td><td class="pop">0.581</td><td style="text-align:left; font-family:'IBM Plex Sans KR'; color:var(--ember); font-size:.82rem">위치 병목</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="chart col">
+      <div class="ctitle">두 체제 — 검출(IoU≥0.1) vs 위치(IoU≥0.5)</div>
+      <div class="legend">
+        <span><span class="sw d"></span>검출 rec@.1</span>
+        <span><span class="sw e"></span>위치 rec@.5</span>
+      </div>
+      <div class="grp">
+        <div class="glab"><span>@64</span><span class="gnote">gap ≈ 0 · 안 보임</span></div>
+        <div class="bar"><span class="blab">검출</span><span class="track"><span class="fill d" style="width:17.3%"></span></span><span class="bval">0.173</span></div>
+        <div class="bar"><span class="blab">위치</span><span class="track"><span class="fill e" style="width:16.5%"></span></span><span class="bval">0.165</span></div>
+      </div>
+      <div class="grp">
+        <div class="glab"><span>@128</span><span class="gnote">gap 0.18</span></div>
+        <div class="bar"><span class="blab">검출</span><span class="track"><span class="fill d" style="width:59.2%"></span></span><span class="bval">0.592</span></div>
+        <div class="bar"><span class="blab">위치</span><span class="track"><span class="fill e" style="width:41%"></span></span><span class="bval">0.410</span></div>
+      </div>
+      <div class="grp">
+        <div class="glab"><span>@256</span><span class="gnote">gap 0.37 · 보이나 GT 헐거움</span></div>
+        <div class="bar"><span class="blab">검출</span><span class="track"><span class="fill d" style="width:83.5%"></span></span><span class="bval">0.835</span></div>
+        <div class="bar"><span class="blab">위치</span><span class="track"><span class="fill e" style="width:46.4%"></span></span><span class="bval">0.464</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3>@대형 (256) — 위치 병목 · base는 정상</h3>
+      <p>base는 <strong>검출한다</strong> (rec@IoU0.1 <span class="num">0.835</span>). 낮은 위치 recall(<span class="num">0.464</span>)은 base가 D-Fire 관행대로 밝은 코어에 tight하게 박싱하는데 우리 GT(alpha&gt;0.1)가 헐거워 생긴 <strong>불일치</strong>다. GT를 base 관행 쪽으로 조이면(alpha&gt;0.5) <span class="num">0.581</span>로 회복(<span class="num">+0.117</span>). base의 박싱 관행(bright-ratio 중앙값 <span class="num">0.72</span>)은 정상이고, 헐거운 쪽은 우리 라벨이다.</p>
+      <h3 style="margin-top:1.5rem">@소형 (64) — 검출 병목 · 실효 크기</h3>
+      <p>base가 <strong>진짜 못 본다</strong> (rec@IoU0.1 <span class="num">0.173</span>). IoU를 낮춰도 안 잡히고, GT를 조여도 회복 <span class="num">0</span> — 박스 문제가 아니다. 실효 크기가 <span class="num">21px</span>(1920px 배경 · imgsz 640)로 D-Fire 학습 분포(<span class="num">49–394px</span>)의 하단이다.</p>
+
+      <div class="key">
+        <span class="k">통합</span>
+        <p><strong>base 결함이 아니다.</strong> 병목은 우리 GT 컨벤션(대형)과 실효 크기(소형)이고, <strong>둘 다 가역</strong>이다 — GT 재정의, imgsz↑ / SAHI. 두 증상은 한 뿌리다: base는 불꽃의 밝은 코어에 반응하되 D-Fire의 tight 박싱 관행을 따른다.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 정정 -->
+  <section>
+    <div class="whead col">
+      <p class="eyebrow"><span class="snum">05</span> 정정의 연속</p>
+      <h2>이 결론은 어떻게 섰나 — 매 판정을 검증이 되돌렸다</h2>
+      <p class="lead" style="font-size:1rem; margin-top:.6rem">결론은 한 번에 서지 않았다. 초기 판정마다 과대였고, 원자료·재집계·육안이 매번 정정했다. 이 되돌림 자체가 결과의 신뢰 근거다.</p>
+    </div>
+    <div class="col">
+      <ol class="corr">
+        <li>
+          <p class="was">"base가 소형·대형에서 병목이다"</p>
+          <p class="now">base는 정상 — D-Fire 관행대로 밝은 코어에 tight 박싱. 병목은 우리 GT 컨벤션과 실효 크기, 둘 다 가역.</p>
+          <p class="ev">근거 · det 박스 평균 alpha 0.401 &gt; 우리 GT 0.256 (CELL 39 / 40b)</p>
+        </li>
+        <li>
+          <p class="was">"개선 7.7× · 1.9× · 18×"</p>
+          <p class="now">단일축 1.55–2.20× (블렌딩 · 같은 GT · 같은 스케일).</p>
+          <p class="ev">근거 · 큰 배수는 블렌딩+스케일+GT 재채점을 한 숫자에 혼합 — 축을 분리하니 붕괴</p>
+        </li>
+        <li>
+          <p class="was">"스필은 해롭다 / 효과 없다"</p>
+          <p class="now">대형선 손해, 소형(@64)선 검출 이득 = 조기검출 조건부 양성.</p>
+          <p class="ev">근거 · rec@IoU0.1 @64 +0.135 (VFX) · +0.305 (NIST)</p>
+        </li>
+        <li>
+          <p class="was">"조잡한 합성이 사실적인 것보다 낫다 (0a_hard)"</p>
+          <p class="now">박스정합 아티팩트일 뿐 — 검출레벨에선 역전.</p>
+          <p class="ev">근거 · rec@.5 0a 승(0.504 &gt; 0.464) → rec@.1 역전(0.799 &lt; 0.835)</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section>
+    <div class="col">
+      <div class="whead">
+        <p class="eyebrow"><span class="snum">06</span> 한계와 정직</p>
+        <h2>이 수치가 말하지 않는 것</h2>
+      </div>
+      <div class="limits">
+        <h3>스코프 경계</h3>
+        <div class="li"><span class="lk">프록시</span><p>(A)는 <strong>프리즈 인식률</strong>이다. 이 합성으로 <em class="term">재학습</em>하면 실화재 검출이 오르는지는 측정하지 않았다.</p></div>
+        <div class="li"><span class="lk">"얼마나"</span><p>개선 수치의 정직한 답 = 프리즈 인식률 기준 over 블렌딩 <span class="num">1.55–2.20×</span>(스케일 역순 · 같은 GT · 같은 스케일). 검출기 성능 개선이 아니다.</p></div>
+        <div class="li"><span class="lk">다음</span><p>문자 그대로 "적용 → 검출 개선"은 재학습 + 실 홀드아웃을 요구한다. 급식실 CCTV 실화재 홀드아웃의 부재가 남은 관문.</p></div>
+        <div class="li"><span class="lk">역설</span><p>base가 <strong>놓치는</strong> 합성일수록 학습 가치가 크다. 프록시 recall을 올리는 방향이 학습 데이터로는 역효과일 수 있다.</p></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  <div class="col">
+    <p class="fnote"><strong>검증.</strong> 레버·진단 수치 전량은 저장된 원자료(ablation_rows.json)를 재집계해 확인했다 — 재추론 0. 재실행이 필요했던 rec@IoU0.1·GT 임계 스윕은 sanity 게이트(GT&gt;0.1 열이 원 rec@0.5를 재현)를 통과했다. 컴포지팅 vs 생성 <strong>비교 수치</strong>(우리 0.915 · 0-b 박스 0.675/0.669)는 미검증이라 제외 — 출발점은 숫자 없이 맥락으로만.</p>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var root = document.documentElement, btn = document.getElementById('themeBtn');
+    function current(){
+      var s = root.getAttribute('data-theme');
+      if (s) return s;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    btn.addEventListener('click', function(){
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('dfire-theme', next); } catch(e){}
+    });
+  })();
+</script>
