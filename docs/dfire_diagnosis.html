@@ -385,7 +385,8 @@
 
     <div class="col">
       <h3>@대형 (256) — 위치 병목 · base는 정상</h3>
-      <p>base는 <strong>검출한다</strong> (rec@IoU0.1 <span class="num">0.835</span>). 낮은 위치 recall(<span class="num">0.464</span>)은 base가 D-Fire 관행대로 밝은 코어에 tight하게 박싱하는데 우리 GT(alpha&gt;0.1)가 헐거워 생긴 <strong>불일치</strong>다. GT를 base 관행 쪽으로 조이면(alpha&gt;0.5) <span class="num">0.581</span>로 회복(<span class="num">+0.117</span>). base의 박싱 관행(bright-ratio 중앙값 <span class="num">0.72</span>)은 정상이고, 헐거운 쪽은 우리 라벨이다.</p>
+      <p>base는 <strong>검출한다</strong> (rec@IoU0.1 <span class="num">0.835</span>). 낮은 위치 recall(<span class="num">0.464</span>)은 base가 D-Fire 관행대로 밝은 코어에 tight하게 박싱하는데 우리 GT(alpha&gt;0.1)가 헐거워 생긴 <strong>불일치</strong>다. GT를 조일수록 rec@.5가 <strong>단조 회복</strong>(0.464 → 0.581<span class="num">@.5</span> → 0.624<span class="num">@.7</span>, 꺾임 없음). base 박싱 관행(bright-ratio 중앙값 <span class="num">0.72</span>)은 정상이고, 헐거운 쪽은 우리 라벨이다.</p>
+      <p style="font-size:.95rem; color:var(--muted)">★ 단 회복은 <strong>스케일 의존이고 완전하지 않다</strong>: @128은 GT 조임으로 거의 닫히나(잔차 <span class="num">0.058</span>), @256은 가장 tight한 GT(0.7)로도 검출률 0.835에 <span class="num">0.211</span> 못 미친다(GT가 ~43%만 회복). 대형에서 GT로 안 닫히는 이 잔차는 <strong>새 미제</strong>(원인 미규명). "정답 박스 최적 임계"는 단일값으로 존재하지 않는다(단조 · [0.1,0.7]서 최적점 없음).</p>
       <h3 style="margin-top:1.5rem">@소형 (64) — 검출 병목 · 실효 크기</h3>
       <p>base가 <strong>진짜 못 본다</strong> (rec@IoU0.1 <span class="num">0.173</span>). IoU를 낮춰도 안 잡히고, GT를 조여도 회복 <span class="num">0</span> — 박스 문제가 아니다. 실효 크기가 <span class="num">21px</span>(1920px 배경 · imgsz 640)로 D-Fire 학습 분포(<span class="num">49–394px</span>)의 하단이다.</p>
 
