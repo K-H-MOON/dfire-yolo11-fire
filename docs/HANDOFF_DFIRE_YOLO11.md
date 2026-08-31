@@ -15,13 +15,21 @@
 9. **★★통합 = base는 불꽃 "밝은 코어"에 반응**: @64 코어 작아 발화실패 · @256 코어만 박싱(under-box). 두 증상 **한 뿌리**. **합성법 개선불가 = base/Phase B 영역.**
 10. **0a_hard "조잡>사실" 철회**: rec@.5 0a승(0.504>0.464)→rec@.1 역전(0.799<0.835)=박스정합 아티팩트. ("realism 무익"은 배치·스필 null로 여전히 성립.)
 
+**★★정정(2026-08-31 후속 — D-Fire 관행 확인 CELL 39/39c/40/40b): ⑧⑨ + "base 병목/약점" + @64 해석 정정. base 약점 아님·병목은 우리쪽·가역.**
+- **@64 = 상대크기(순수 소형)**: 우리 배경 long-side 1920px·ablation imgsz640 → scale 64 실효 **21px**(D-Fire 64px→98px·4.6×). 우리 전 스케일(21/43/85px 실효)이 D-Fire 학습분포(49~394px) **하단** → ablation이 실효-작은 구간서만 돎. @64 miss=**크기**(appearance 아님·상대크기 교란 확인). **scale 결론=측정구간 단서·큰 실효크기선 포화 가능.** 소형 대응=imgsz↑/SAHI.
+- **under-box = A(GT정의)+C(소스밀도)·B(base약점) 기각**: D-Fire 사람박싱=밝은불 tight(대표 random·1박스/img bright-ratio med **0.72**·편향샘플 0.355는 야간 patchy 산불). 우리 GT(alpha>0.1)=wispy. **CELL40b(bg오염0·alpha밀도): base det 박스 평균alpha 0.401·고alpha 0.397 > 우리 GT 0.256·0.250 (+0.145·n391)** → base가 조밀부(고alpha) 박싱=D-Fire 컨벤션대로 **정상**·우리 GT wispy 포함이 under-box 원인. ⑧ "2/3 under-box=base특성"·⑨ "합성법 개선불가=base영역" **철회.**
+- **"base 병목/약점" 철회**: @256 under-box=우리 GT loose+VFX wispy+실효-작은 스케일=**전부 우리쪽·가역**. base는 @256 검출함(rec@.1 0.835)·D-Fire 컨벤션대로 tight 박싱. base 대체로 정상.
+- **Phase B 처방(귀속 확정)**: (A) GT를 base 컨벤션에 맞춤(alpha>0.1보다 조임·det 평균alpha 0.40·정확 최적점=IoU-vs-GT임계 스윕 필요) · (C) 밀도 높은 실불 소스 추가(**단 (B)선 wispy도 학습·배제 아님**·실화재도 성김 있음) · 소형=imgsz↑/SAHI. **base 재학습 우선순위 아님.**
+- **D-Fire 구성**: 다양한 대형 실불(산불+건물+차량+도심·뉴스푸티지·**근접 주방 아님·산불 일색도 아님**).
+- **방법교훈**: numeric 3회 교란(상대크기·편향샘플[정렬-첫N]·bg오염[밝은 주방서 luma mask 오검]) → 육안+alpha+대표샘플로 매번 정정. [[no-premature-conclusions]] 강화.
+
 **정밀화(리뷰)**: (a) @64 대비=**판정유보**(n_hit 28 약함)·근거는 육안(어두운 bgL 85/95/111도 det 0.00=밝기 무관 소형불 미발화). (b) under-box **양면성**="base 학습컨벤션 ↔ 우리 GT(alpha>0.1) 정의 불일치"(**D-Fire 박싱관행 미확인**=Phase B 열쇠: base 고칠지 GT 맞출지). (c) 운영=**"대형 검출 확보·조기(소형) 경보 미확보"**(@64 rec@.1 0.173·경보 핵심가치=조기검출).
 
-**한 줄**: 합성 *방법*(over 제외)은 미미한 레버 · over(washout 회피)+scale이 큰 축 · base=밝은코어 반응(소형 발화실패·대형 under-box) · **진짜 큰 레버(GAN 생성·학습)+조기검출은 미탐 프런티어.** (A) 프레임 전체 — (B) 실전유용은 별개.
+**한 줄**: 합성 *방법*(over 제외)은 미미한 레버 · over(washout 회피)+충분크기가 큰 축 · **낮은 프록시 recall의 실제 병목 = 우리 GT정의(wispy)+소스밀도+실효-작은 스케일(전부 가역)·base는 대체로 정상**(D-Fire 컨벤션대로 tight 박싱) · 진짜 큰 레버(GAN 생성·학습)+조기(소형)검출은 미탐 프런티어. (A) 프레임 전체 — (B) 실전유용은 별개.
 
 **스코프 한계**: 컴포지팅 knobs만(aug/noise·GAN/diffusion 미측정)·소스 다양성 미조작·(A)프리즈 프록시·NIST n=2(경향)·ign/peak 비독립·D-Fire 박싱관행 미확인·⑥ 종횡비 교락(under-box 잔여에 섞임).
 
-**셀**: `docs/synth_sweep_cells.py` — CELL 32(본실험)·32-nist(NIST뱅크 ign rescue+패딩/anchor 교정)·33(장면분포)·34(소스품질/miss)·37(GT임계 스윕)·36(검출vs위치 rec@.1+cov-Δ)·38(miss 육안). 전부 자립형. (파일 셀순서 34→37→36→38 흐트러짐·자립형이라 실행 무관·CELL35 폐기.)
+**셀**: `docs/synth_sweep_cells.py` — CELL 32(본실험)·32-nist(NIST뱅크 ign rescue)·33(장면분포)·34(소스품질/miss)·37(GT임계 스윕)·36(검출vs위치 rec@.1+cov-Δ)·38(miss 육안)·**39/39c(D-Fire 박싱관행+@64 상대크기)·40/40b(det 박스 alpha밀도=under-box 귀속)**. 전부 자립형. (셀순서 흐트러짐·자립형이라 무관·CELL35 폐기. 39/40은 D-Fire=/content 재다운로드[api_key] 필요.)
 
 **★방법 교훈(이 실험서 반복)**: Claude가 여러 번 과대판정 → 리뷰가 정정: 스필"해롭다"(→n=2 NIST에 끌림)·큐레이션"레버"(→관찰↔처방 혼동·순환)·"대부분 GT아티팩트"(→rec@.1이 GT+underbox 합침)·under-box"느슨"(→실은 코어만 작게). **rec@.1/GT분해/cov-Δ/육안이 매번 잡음.** [[no-premature-conclusions]]·[[no-running-ahead-verify-first]] 강화.
 

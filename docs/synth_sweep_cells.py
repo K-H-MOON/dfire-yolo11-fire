@@ -1835,3 +1835,285 @@ plt.tight_layout(); plt.savefig(f'{DR}/synth_sweep/loc256.png',dpi=85,bbox_inche
 print('저장: miss64.png · loc256.png')
 print('※ @64 3분류: bgL 높고 불꽃 흐림=묻힘(대비) · fh작고 텍스처뭉갬=해상도 · 불꽃형태 소실=형태.')
 print('※ @256: det/GT<1=코어만 작게잡음 · >1=주변까지 넓게 · sh 큼=옮겨짐 → "느슨한 국소화" 성격.')
+
+
+# ========== CELL 39: D-Fire 박싱 관행 확인 — under-box 3-way 귀속(GT 불일치 / base 약점 / 소스분포) ==========
+# under-box(합성서 base가 밝은코어만·det/GT 0.2-0.3)가 (i)우리 GT off (ii)base 약점 (iii)소스분포 불일치 중 무엇?
+# ★같은 luma 정의((R>B+30&R>90)|lum>210)를 D-Fire 박스 + 우리 VFX 매트 양쪽에 적용해 bright-ratio 직접비교(cov[alpha]는 정의 달라 폐기). + D-Fire 박스 육안 몽타주(convention).
+# D-Fire=/content(리셋 시 재다운로드·api_key·CELL1~3 돌렸으면 재사용). VFX=Drive.
+import os, glob, csv, subprocess, sys, numpy as np
+for pkg in ('roboflow','PIL','yaml'):
+    mod={'PIL':'PIL','yaml':'yaml'}.get(pkg,pkg)
+    try: __import__(mod)
+    except ImportError: subprocess.run([sys.executable,'-m','pip','install','-q',{'PIL':'Pillow','yaml':'pyyaml'}.get(pkg,pkg)],check=True)
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+def flame_mask(rgb):   # ★양쪽 동일 정의(NIST 매트 추출과 같은 임계)
+    R,G,B=rgb[...,0].astype(float),rgb[...,1].astype(float),rgb[...,2].astype(float); lum=0.299*R+0.587*G+0.114*B
+    return ((R>B+30)&(R>90))|(lum>210)
+# --- (1) 우리 VFX bright-ratio (같은 luma 정의·alpha>0.1 bbox 내) ---
+VFXB='/content/drive/MyDrive/firecrop_src/vfx_bank'; vbr=[]; seen=set()
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')):
+    if r['scene_id'] in seen: continue
+    seen.add(r['scene_id']); fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); ys,xs=np.where(fl[...,3]>25)
+    if len(xs): vbr.append(float(flame_mask(fl[ys.min():ys.max()+1,xs.min():xs.max()+1,:3]).mean()))
+vbr=np.array(vbr)
+# --- (2) D-Fire 확보 ---
+def find_split():
+    if os.path.isdir('/content/D-Fire-1/train/images'):   # 이미 다운된 raw 재사용(재다운 방지)
+        import yaml; nm=yaml.safe_load(open('/content/D-Fire-1/data.yaml')).get('names',['fire','smoke'])
+        return '/content/D-Fire-1/train', {i:n for i,n in enumerate(nm)}
+    for c in ('/content/dfire_fireonly/train','/content/dfire_ptrain/train'):
+        if os.path.isdir(c+'/images'): return c, {0:'fire'}
+    return None, None
+sp, names = find_split()
+if sp is None:
+    from roboflow import Roboflow
+    rf = Roboflow(api_key="너의_로보플로우_키")   # ← CELL 2와 같은 키 (D-Fire /content에 없을 때만·~10분)
+    ds = rf.workspace("kyungho-moon").project("d-fire-aqheb-6iyqy").version(1).download("yolov11")
+    root = ds.location; sp = f'{root}/train'
+    import yaml; nm = yaml.safe_load(open(f'{root}/data.yaml')).get('names',['fire']); names = {i:n for i,n in enumerate(nm)}
+fire_idx = next((i for i,n in names.items() if 'fire' in str(n).lower()), 0)
+print(f'D-Fire split={sp} · names={names} · fire_idx={fire_idx}')
+# --- (3) D-Fire fire 박스 bright-ratio(같은 luma) + 몽타주 케이스 ---
+imgs=sorted(glob.glob(f'{sp}/images/*.jpg')+glob.glob(f'{sp}/images/*.png')+glob.glob(f'{sp}/images/*.jpeg'))
+import random; random.seed(0); random.shuffle(imgs)   # ★대표성: 정렬-첫N(한 카메라 연속프레임) 편향 제거
+cases=[]; dbr=[]; bhs=[]
+for ip in imgs:
+    lp=f'{sp}/labels/'+os.path.splitext(os.path.basename(ip))[0]+'.txt'
+    if not os.path.exists(lp): continue
+    boxes=[[float(x) for x in ln.split()[1:5]] for ln in open(lp) if len(ln.split())>=5 and int(float(ln.split()[0]))==fire_idx]
+    if not boxes: continue
+    im=np.asarray(Image.open(ip).convert('RGB')); H,W=im.shape[:2]
+    for cx,cy,bw,bh in boxes:
+        x0,y0=max(0,int((cx-bw/2)*W)),max(0,int((cy-bh/2)*H)); x1,y1=min(W,int((cx+bw/2)*W)),min(H,int((cy+bh/2)*H))
+        if x1>x0 and y1>y0: dbr.append(float(flame_mask(im[y0:y1,x0:x1]).mean())); bhs.append(y1-y0)
+    if len(cases)<30: cases.append((im,boxes))
+    if len(dbr)>=400: break
+dbr=np.array(dbr); bhs=np.array(bhs)
+def q(a): return f'{a.mean():.3f} (Q1/med/Q3 {np.percentile(a,25):.2f}/{np.percentile(a,50):.2f}/{np.percentile(a,75):.2f})'
+print(f'\n★같은 luma 정의 bright-ratio 직접비교:')
+print(f'  D-Fire fire 박스 (n{len(dbr)}): {q(dbr)}')
+print(f'  우리 VFX 매트     (n{len(vbr)}): {q(vbr)}')
+print(f'D-Fire 박스높이(px·416): mean {bhs.mean():.0f} · med {np.percentile(bhs,50):.0f} · <64비율 {(bhs<64).mean():.0%}')
+# --- (4) 몽타주(D-Fire 박스·육안 정본) ---
+fig,ax=plt.subplots(5,6,figsize=(20,17)); ax=ax.ravel()
+for i,(im,boxes) in enumerate(cases[:30]):
+    H,W=im.shape[:2]; vis=Image.fromarray(im.copy()); d=ImageDraw.Draw(vis)
+    for cx,cy,bw,bh in boxes:
+        d.rectangle([int((cx-bw/2)*W),int((cy-bh/2)*H),int((cx+bw/2)*W),int((cy+bh/2)*H)],outline=(0,255,0),width=2)
+    ax[i].imshow(vis); ax[i].axis('off')
+for j in range(len(cases[:30]),30): ax[j].axis('off')
+fig.suptitle('D-Fire fire boxes (green=human GT) -- hug bright core(tight) vs wrap full/dim(loose)?',fontsize=12)
+plt.tight_layout(); plt.savefig('/content/dfire_boxing.png',dpi=80,bbox_inches='tight'); plt.show()
+print('\n※ 3-way 귀속 (수치=정도·육안=의도·둘 다):')
+print('  A) 몽타주 D-Fire 박스가 밝은코어 hug(tight) → 우리 GT(alpha0.1 wispy) off·base 정상 = GT 불일치 → Phase B: GT 맞춤')
+print('  B) D-Fire 박스 loose(전체·dim) + bright-ratio ≈ VFX → base 전체학습인데 under-box = base 약점 → Phase B: base 재학습')
+print('  C) D-Fire 박스 loose + bright-ratio ≫ VFX(D-Fire 조밀) → base 조밀불만 학습·성긴 우리불엔 코어만 = 소스분포 불일치 → Phase B: 성긴 불꽃 학습투입')
+print('  ⚠️분모 성격 약간 다름(VFX 매트=black filler·D-Fire 박스=real bg filler) → 정도 비교용·육안 병행.')
+
+
+# ========== CELL 40: base det 박스 내 bright-ratio 직접측정 — under-box=A+C·B기각 확정 ==========
+# 간접추론(det/GT≈VFX bright-ratio) → 직접: base det 박스 안이 밝은불로 꽉 찼나(=D-Fire tight 0.72) vs GT는 wispy(0.25).
+# 같은 합성본(scale256·over_ctx)서 [det 박스 bright-ratio] vs [GT 박스 bright-ratio]. det≈0.72면 base가 D-Fire대로 tight 박싱=B기각.
+import os, csv, subprocess, sys, json, unicodedata
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'],check=True)
+from ultralytics import YOLO
+import numpy as np
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR='/content/drive/MyDrive'; FSRC=f'{DR}/firecrop_src'
+W=f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt'; BG_ROOT=f'{DR}/realneg_frames/synth'; VFXB=f'{FSRC}/vfx_bank'; CONF=0.25
+def ropen(p):
+    for qq in (p, unicodedata.normalize('NFC',p), unicodedata.normalize('NFD',p)):
+        try: return Image.open(qq).convert('RGB')
+        except: pass
+    return None
+def flame_mask(rgb):
+    R,G,B=rgb[...,0].astype(float),rgb[...,1].astype(float),rgb[...,2].astype(float); lum=0.299*R+0.587*G+0.114*B
+    return ((R>B+30)&(R>90))|(lum>210)
+def bratio(img, box):
+    x0,y0,x1,y1=[int(v) for v in box]; x0,y0=max(0,x0),max(0,y0); x1,y1=min(img.shape[1],x1),min(img.shape[0],y1)
+    return float(flame_mask(img[y0:y1,x0:x1]).mean()) if (x1>x0 and y1>y0) else None
+def iou(a,b):
+    ix0,iy0=max(a[0],b[0]),max(a[1],b[1]); ix1,iy1=min(a[2],b[2]),min(a[3],b[3]); iw,ih=max(0,ix1-ix0),max(0,iy1-iy0)
+    inter=iw*ih; ua=(a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter; return inter/ua if ua>0 else 0.0
+def composite(bg, flame, point, scale, anchor):
+    bgn=np.asarray(bg).astype(np.float32); H,Wd=bgn.shape[:2]; fr=Image.fromarray(flame)
+    tw=max(1,int(fr.width*scale/fr.height)); flr=np.asarray(fr.resize((tw,scale))).astype(np.float32); fh,fw=flr.shape[:2]
+    px=int(point[0]-fw//2); py=int(point[1]-int(anchor*(fh-1)))
+    x0,y0=max(0,px),max(0,py); xe,ye=min(Wd,px+fw),min(H,py+fh); fx0,fy0=x0-px,y0-py; rw,rh=xe-x0,ye-y0
+    out=bgn.copy(); A=np.zeros((H,Wd),np.float32)
+    if rw>0 and rh>0:
+        reg=flr[fy0:fy0+rh,fx0:fx0+rw]; a=reg[...,3:4]/255.
+        out[y0:y0+rh,x0:x0+rw]=out[y0:y0+rh,x0:x0+rw]*(1-a)+reg[...,:3]*a; A[y0:y0+rh,x0:x0+rw]=reg[...,3]/255.
+    ys,xs=np.where(A>0.1); gt=(int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max())) if len(xs) else None
+    return np.clip(out,0,255).astype(np.uint8), gt
+m=YOLO(W); vman={}
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')): vman.setdefault(r['scene_id'],r)
+BG_MAN=json.load(open(f'{FSRC}/manifest.json')); PLACE=json.load(open(f'{FSRC}/placement.json'))
+bgs=[(n,ropen(f'{BG_ROOT}/{BG_MAN[n]}'),PLACE[n]) for n in sorted(PLACE)]; bgs=[b for b in bgs if b[1]]
+det_br=[]; gt_br=[]; mont=[]
+for sid,r in vman.items():
+    fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); anc=float(r['anchor_frac'])
+    for n,bg,box in bgs:
+        comp,gt=composite(bg,fl,((box[0]+box[2])//2,box[3]),256,anc)
+        if gt is None: continue
+        res=m.predict(Image.fromarray(comp),conf=0.001,iou=0.6,max_det=300,verbose=False)[0]
+        if res.boxes is None or len(res.boxes)==0: continue
+        xy=res.boxes.xyxy.cpu().numpy(); cf=res.boxes.conf.cpu().numpy()
+        cand=[(xy[i],cf[i]) for i in range(len(cf)) if cf[i]>=CONF and iou(xy[i],gt)>=0.1]   # 불꽃 검출(bg FP 배제)
+        if not cand: continue
+        dbox,_=max(cand,key=lambda z:z[1]); db=bratio(comp,dbox); gb=bratio(comp,gt)
+        if db is not None and gb is not None:
+            det_br.append(db); gt_br.append(gb)
+            if len(mont)<8: mont.append((comp,gt,dbox,db,gb))
+det_br=np.array(det_br); gt_br=np.array(gt_br)
+def qq(a): return f'{a.mean():.3f} (med {np.percentile(a,50):.2f}, n{len(a)})'
+print('★같은 luma 정의 bright-ratio 직접비교 (같은 합성본·scale256·over_ctx):')
+print(f'  base det 박스 내 : {qq(det_br)}   ← D-Fire tight(0.72) 같으면 base가 밝은불 tight 박싱=B기각 확정')
+print(f'  우리 GT 박스 내  : {qq(gt_br)}    ← wispy envelope')
+print(f'  참고: D-Fire 박스 0.645(med0.72) · VFX 매트 0.246')
+fig,ax=plt.subplots(2,4,figsize=(18,9)); ax=ax.ravel()
+for i,(comp,gt,dbox,db,gb) in enumerate(mont[:8]):
+    pd=25; x0,y0=max(0,gt[0]-pd),max(0,gt[1]-pd); x1,y1=min(comp.shape[1],gt[2]+pd),min(comp.shape[0],gt[3]+pd)
+    sub=Image.fromarray(comp[y0:y1,x0:x1].copy()); d=ImageDraw.Draw(sub)
+    d.rectangle([gt[0]-x0,gt[1]-y0,gt[2]-x0,gt[3]-y0],outline=(0,255,0),width=3)
+    d.rectangle([int(dbox[0])-x0,int(dbox[1])-y0,int(dbox[2])-x0,int(dbox[3])-y0],outline=(255,0,0),width=2)
+    ax[i].imshow(sub); ax[i].axis('off'); ax[i].set_title(f'det br{db:.2f} / GT br{gb:.2f}',fontsize=9)
+for j in range(len(mont[:8]),8): ax[j].axis('off')
+fig.suptitle('green=GT(wispy) red=base det -- det box mostly bright flame? (br=bright-ratio)',fontsize=11)
+plt.tight_layout(); plt.savefig(f'{DR}/synth_sweep/det_bratio.png',dpi=85,bbox_inches='tight'); plt.show()
+print('\n※ 판정: det≈0.72 & GT≈0.25 → base는 D-Fire대로 밝은불 tight 박싱(정확)·GT가 wispy(loose)=under-box는 A+C·base 약점 아님(확정).')
+print('  det도 낮으면(≈GT) → base가 wispy 전체 박싱 → 재해석 필요.')
+# ★주의: 위 CELL 40(luma bright-ratio)은 밝은 주방 bg에 오염(GT box matte0.246→composite0.546)=결과 무효. 정본=아래 CELL 40b(alpha·bg오염0). CELL 39도 편향(정렬-첫N 산불1시퀀스)=정본은 39c(대표 random 1박스/img).
+
+
+# ========== CELL 39c: @64 상대크기 교란 확인 + D-Fire 대표 재샘플(정본) ==========
+import os, glob, csv, json, random, numpy as np
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR='/content/drive/MyDrive'; FSRC=f'{DR}/firecrop_src'; BG_ROOT=f'{DR}/realneg_frames/synth'; VFXB=f'{FSRC}/vfx_bank'
+IMGSZ=640   # ablation predict() imgsz 미지정 = ultralytics 기본
+def flame_mask(rgb):
+    R,G,B=rgb[...,0].astype(float),rgb[...,1].astype(float),rgb[...,2].astype(float); lum=0.299*R+0.587*G+0.114*B
+    return ((R>B+30)&(R>90))|(lum>210)
+# (0) ★@64 상대크기: 우리 bg 해상도 → imgsz640 실효크기 vs D-Fire (실측: 1920px → scale64 실효 21px·D-Fire 64px→98px·4.6x)
+BG_MAN=json.load(open(f'{FSRC}/manifest.json')); PLACE=json.load(open(f'{FSRC}/placement.json'))
+bgsz=[]
+for n in list(PLACE):
+    try: bgsz.append(Image.open(f'{BG_ROOT}/{BG_MAN[n]}').size)
+    except: pass
+bgmax=float(np.median([max(w,h) for w,h in bgsz])) if bgsz else 0
+print(f'우리 배경 long-side 중앙값: {bgmax:.0f}px (샘플 {bgsz[:3]}, n{len(bgsz)})')
+for S in (64,128,256):
+    eo=S*IMGSZ/bgmax if bgmax else 0; ed=S*IMGSZ/416
+    print(f'  scale {S}px → 우리 실효 {eo:.0f}px | D-Fire {S}px→{ed:.0f}px | 배율차 {ed/eo:.1f}x' if eo else '')
+# (1) VFX bright-ratio (같은 luma·matte alpha bbox)
+vbr=[]; seen=set()
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')):
+    if r['scene_id'] in seen: continue
+    seen.add(r['scene_id']); fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); ys,xs=np.where(fl[...,3]>25)
+    if len(xs): vbr.append(float(flame_mask(fl[ys.min():ys.max()+1,xs.min():xs.max()+1,:3]).mean()))
+vbr=np.array(vbr)
+# (2) D-Fire 대표 (1박스/이미지·random shuffle=시퀀스 편향 완화)
+sp='/content/D-Fire-1/train'
+import yaml; nm=yaml.safe_load(open('/content/D-Fire-1/data.yaml')).get('names',['fire','smoke'])
+fire_idx=next((i for i,n in enumerate(nm) if 'fire' in str(n).lower()),0)
+imgs=glob.glob(f'{sp}/images/*.jpg')+glob.glob(f'{sp}/images/*.png'); random.seed(0); random.shuffle(imgs)
+cases=[]; recs=[]
+for ip in imgs:
+    lp=f'{sp}/labels/'+os.path.splitext(os.path.basename(ip))[0]+'.txt'
+    if not os.path.exists(lp): continue
+    fb=[[float(x) for x in ln.split()[1:5]] for ln in open(lp) if len(ln.split())>=5 and int(float(ln.split()[0]))==fire_idx]
+    if not fb: continue
+    im=np.asarray(Image.open(ip).convert('RGB')); H,W=im.shape[:2]
+    cx,cy,bw,bh=max(fb,key=lambda b:b[2]*b[3])   # 이미지당 1박스(최대)
+    x0,y0=max(0,int((cx-bw/2)*W)),max(0,int((cy-bh/2)*H)); x1,y1=min(W,int((cx+bw/2)*W)),min(H,int((cy+bh/2)*H))
+    if x1>x0 and y1>y0: recs.append((float(flame_mask(im[y0:y1,x0:x1]).mean()), y1-y0))
+    if len(cases)<30: cases.append((im,fb))
+    if len(recs)>=300: break
+recs=np.array(recs); dbr=recs[:,0]; bhs=recs[:,1]
+def qf(a): return f'{a.mean():.3f} (Q1/med/Q3 {np.percentile(a,25):.2f}/{np.percentile(a,50):.2f}/{np.percentile(a,75):.2f})'
+print(f'\n★D-Fire bright-ratio (1박스/img·n{len(dbr)}): {qf(dbr)}  |  VFX (n{len(vbr)}): {qf(vbr)}   (실측 D-Fire med0.72 tight vs VFX 0.246 wispy)')
+print(f'D-Fire 박스높이(px·416): med {np.percentile(bhs,50):.0f} · <64 {(bhs<64).mean():.0%} · <32 {(bhs<32).mean():.0%}')
+for lab,msk in [('작은박스<64',bhs<64),('큰박스>=64',bhs>=64)]:
+    if msk.sum(): print(f'  {lab} (n{int(msk.sum())}): bright-ratio {dbr[msk].mean():.3f}')
+fig,ax=plt.subplots(5,6,figsize=(20,17)); ax=ax.ravel()
+for i,(im,fb) in enumerate(cases[:30]):
+    H,W=im.shape[:2]; vis=Image.fromarray(im.copy()); d=ImageDraw.Draw(vis)
+    for cx,cy,bw,bh in fb: d.rectangle([int((cx-bw/2)*W),int((cy-bh/2)*H),int((cx+bw/2)*W),int((cy+bh/2)*H)],outline=(0,255,0),width=2)
+    ax[i].imshow(vis); ax[i].axis('off')
+for j in range(len(cases[:30]),30): ax[j].axis('off')
+fig.suptitle('D-Fire RANDOM (green=GT) -- composition? tight/loose?',fontsize=12)
+plt.tight_layout(); plt.savefig('/content/dfire_rand.png',dpi=80,bbox_inches='tight'); plt.show()
+print('\n※ 결과: 우리 실효크기 ≪ D-Fire → @64=순수 크기. D-Fire 대표 bright-ratio 0.72(tight) ≫ VFX 0.246 → 우리 GT/소스가 off. 구성 다양(산불+건물+차량·근접주방 아님).')
+
+
+# ========== CELL 40b: det vs GT 박스 alpha-밀도 (bg 오염 없는 클린 측정·정본) ==========
+# CELL40 luma는 밝은 주방 bg 오염. → 불꽃 alpha로: det 박스 평균alpha vs GT 박스. det>GT면 base가 조밀부 박싱=A+C·B기각.
+# 실측: det 평균alpha 0.401·고alpha0.397 > GT 0.256·0.250 (+0.145·n391) → under-box=A(GT정의)+C(밀도)·B기각 확정.
+import os, csv, subprocess, sys, json, unicodedata
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable,'-m','pip','install','-q','ultralytics'],check=True)
+from ultralytics import YOLO
+import numpy as np
+from PIL import Image
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR='/content/drive/MyDrive'; FSRC=f'{DR}/firecrop_src'
+W=f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt'; BG_ROOT=f'{DR}/realneg_frames/synth'; VFXB=f'{FSRC}/vfx_bank'; CONF=0.25
+def ropen(p):
+    for qq in (p, unicodedata.normalize('NFC',p), unicodedata.normalize('NFD',p)):
+        try: return Image.open(qq).convert('RGB')
+        except: pass
+    return None
+def iou(a,b):
+    ix0,iy0=max(a[0],b[0]),max(a[1],b[1]); ix1,iy1=min(a[2],b[2]),min(a[3],b[3]); iw,ih=max(0,ix1-ix0),max(0,iy1-iy0)
+    inter=iw*ih; ua=(a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter; return inter/ua if ua>0 else 0.0
+def composite(bg, flame, point, scale, anchor):
+    bgn=np.asarray(bg).astype(np.float32); H,Wd=bgn.shape[:2]; fr=Image.fromarray(flame)
+    tw=max(1,int(fr.width*scale/fr.height)); flr=np.asarray(fr.resize((tw,scale))).astype(np.float32); fh,fw=flr.shape[:2]
+    px=int(point[0]-fw//2); py=int(point[1]-int(anchor*(fh-1)))
+    x0,y0=max(0,px),max(0,py); xe,ye=min(Wd,px+fw),min(H,py+fh); fx0,fy0=x0-px,y0-py; rw,rh=xe-x0,ye-y0
+    out=bgn.copy(); A=np.zeros((H,Wd),np.float32)
+    if rw>0 and rh>0:
+        reg=flr[fy0:fy0+rh,fx0:fx0+rw]; a=reg[...,3:4]/255.
+        out[y0:y0+rh,x0:x0+rw]=out[y0:y0+rh,x0:x0+rw]*(1-a)+reg[...,:3]*a; A[y0:y0+rh,x0:x0+rw]=reg[...,3]/255.
+    ys,xs=np.where(A>0.1); gt=(int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max())) if len(xs) else None
+    return np.clip(out,0,255).astype(np.uint8), gt, A
+def box_alpha(A, box):
+    x0,y0,x1,y1=[int(v) for v in box]; x0,y0=max(0,x0),max(0,y0); x1,y1=min(A.shape[1],x1),min(A.shape[0],y1)
+    if x1<=x0 or y1<=y0: return None,None
+    reg=A[y0:y1,x0:x1]; return float(reg.mean()), float((reg>0.5).mean())
+m=YOLO(W); vman={}
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')): vman.setdefault(r['scene_id'],r)
+BG_MAN=json.load(open(f'{FSRC}/manifest.json')); PLACE=json.load(open(f'{FSRC}/placement.json'))
+bgs=[(n,ropen(f'{BG_ROOT}/{BG_MAN[n]}'),PLACE[n]) for n in sorted(PLACE)]; bgs=[b for b in bgs if b[1]]
+dA=[]; gA=[]; dH=[]; gH=[]
+for sid,r in vman.items():
+    fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); anc=float(r['anchor_frac'])
+    for n,bg,box in bgs:
+        comp,gt,A=composite(bg,fl,((box[0]+box[2])//2,box[3]),256,anc)
+        if gt is None: continue
+        res=m.predict(Image.fromarray(comp),conf=0.001,iou=0.6,max_det=300,verbose=False)[0]
+        if res.boxes is None or len(res.boxes)==0: continue
+        xy=res.boxes.xyxy.cpu().numpy(); cf=res.boxes.conf.cpu().numpy()
+        cand=[(xy[i],cf[i]) for i in range(len(cf)) if cf[i]>=CONF and iou(xy[i],gt)>=0.1]
+        if not cand: continue
+        dbox,_=max(cand,key=lambda z:z[1])
+        dma,dhi=box_alpha(A,dbox); gma,ghi=box_alpha(A,gt)
+        if None not in (dma,gma): dA.append(dma); gA.append(gma); dH.append(dhi); gH.append(ghi)
+dA,gA,dH,gH=map(np.array,(dA,gA,dH,gH))
+print('★불꽃 alpha 밀도 (bg 오염 없음·n%d):'%len(dA))
+print(f'  base det 박스: 평균alpha {dA.mean():.3f} · 고alpha(>0.5)비율 {dH.mean():.3f}')
+print(f'  우리 GT 박스 : 평균alpha {gA.mean():.3f} · 고alpha비율 {gH.mean():.3f}')
+print(f'  det−GT: 평균alpha {dA.mean()-gA.mean():+.3f} · 고alpha {dH.mean()-gH.mean():+.3f}')
+print('※ det>GT(더 조밀) → base가 조밀코어 박싱(D-Fire 컨벤션 정상)·GT는 저alpha wispy 포함 = under-box A(GT정의)+C(밀도)·B기각.')
