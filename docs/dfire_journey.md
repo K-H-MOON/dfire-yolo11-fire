@@ -337,4 +337,45 @@
 
 ---
 
+## 부록 · 재현에 필요한 것 (repro checklist)
+
+> **이 문서(설명)만으론 재현이 안 된다.** 아래는 **"작업 이어받기/재현" 용도에만** 필요 — "결과 이해"가 목적이면 본문 + 아티팩트 링크로 충분하다(데이터 불요).
+
+### 코드
+- repo `kitchen-smoke-poc` · 셀 = `docs/synth_sweep_cells.py`(합성 ablation) · `docs/dfire_baseline_cells.py`(base) · `docs/realneg_qc_cells.py`(실배경·헛불). 전부 자립형(self-mount · ultralytics 설치가드).
+- 실행 = **Google Colab**(Drive 마운트). `/content`는 런타임마다 초기화 → **repo 매번 재클론**(Drive 마운트는 유지). base 학습만 GPU, 나머지는 CPU로 충분.
+
+### Roboflow 원본 이미지 — **api_key 필요**
+- **D-Fire base**: 워크스페이스 `kyungho-moon` · 프로젝트 `d-fire-aqheb-6iyqy` · **v1** · `download("yolov11")` (21,522장). base 재학습·재평가·CELL 39/40 재다운로드에 필요.
+- **합성 검증셋(0-b)**: `kyungho-moon/kitchen-fire-noise-poc` · **v1** · 351장. step 2(합성 검증).
+- **api_key 없으면 이 셀들은 안 돈다.**
+
+### Drive 경로 (셀 코드와 대조해 검증함 · 전부 `/content/drive/MyDrive/` 하위)
+| 무엇 | 경로 | 비고 |
+|---|---|---|
+| 학습된 모델 | `dfire_runs/fire_ptrain_b79/weights/best.pt` | 채택 base(frozen 심판) |
+| 불꽃 소스 · VFX | `firecrop_src/vfx_bank/` | `manifest.csv` + 매트 · 26장면 |
+| 불꽃 소스 · NIST | `firecrop_src/nist_bank/` · `firecrop_src/nist_stovetop_cornoil/` | 조리유 앵커 · v0/v2용 6장 |
+| **합성 배경 (소스 풀)** | `realneg_frames/synth/` | **798장 · 8개교** |
+| **ablation 실제 사용 배경** | `firecrop_src/placement.json` | **798 중 18장** 키 + 조리면 불배치 박스 |
+| 실험 원자료 | `synth_sweep/*.json` | `ablation_rows` · `ablation_rec01_gtsweep` · `ablation_aug` 등 |
+
+> **★ 798 vs 18 (핵심 주의)** — `realneg_frames/synth`는 배경 **소스 풀 798장(8교)**이고, ablation이 실제 쓴 건 그중 **18장**이다. 셀은 `BG_ROOT`(=`realneg_frames/synth`)에서 파일을 읽되 **어떤 18장인지는 `placement.json`의 키로 정해진다**. 이 둘을 헷갈리면 배경이 안 맞는다.
+
+### vfx_bank 업로드 = ✅ 확인됨
+ablation 셀(CELL 32·33·34·36·38·40b·44)이 `firecrop_src/vfx_bank/manifest.csv` + 매트를 **직접 읽어 정상 실행·커밋 수치를 산출**했다. 없으면 `open()`에서 즉시 크래시하므로 **업로드 완료 상태**. (핸드오프 Phase2의 "업로드 대기"는 ablation 실행 *전* 시점 기록으로, 이후 실행이 그 상태를 갱신했다.)
+
+### 두 Google 계정 (재현 필수 gotcha)
+- **데이터 계정 = `blessmoonkh@gmail.com`**(프로젝트 소유자) — `조리 데이터 영상`(28 급식실 영상 = realneg 소스)·`smoke_frames` 등 소유.
+- **Colab Pro+ = 별도 계정**(seochorobotics). 데이터엔 데이터 계정 폴더의 **바로가기(shortcut)**를 Pro+ MyDrive에 추가해 접근. **Colab은 MyDrive만 마운트("공유됨"은 안 됨)** → 바로가기 필수 · 마운트 후 바로가기 *내용*이 보이는지 확인.
+- 파일명 한글 → 매칭 시 **NFC 정규화**.
+
+### 라이선스·프라이버시 (공유 범위 주의)
+- **급식실 배경 = 실 학교 CCTV** → 프라이버시 민감. **공유 범위를 신중히** 정할 것.
+- D-Fire(Roboflow) · NIST(퍼블릭도메인) · VFX(CC0).
+- **AI-Hub 71751 · DetectiumFire(NC-ND)** = 재배포 제약 있으나 **최종 ablation엔 미사용**(AI-Hub는 조리불이 없어 탈락) → **순수 재현엔 불필요**. 재현 경로 = D-Fire + VFX + NIST + 급식실 배경이면 충분.
+- **아티팩트 3종은 기본 비공개** — 링크 공유(핀 이동/링크 공유) 전엔 팀원에게 안 열린다.
+
+---
+
 *발표용 시각 도표(아티팩트): 요약 deck "낮은 recall의 정체" · 예상 질의응답 · eli5 여정 "D-Fire 정직한 0.660". 근거 상세 = `HANDOFF_DFIRE_YOLO11.md` · `SYNTH_METHOD_EVIDENCE.md`. 이 md는 2026-08-31 기준.*
