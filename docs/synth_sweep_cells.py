@@ -2117,3 +2117,99 @@ print(f'  base det 박스: 평균alpha {dA.mean():.3f} · 고alpha(>0.5)비율 {
 print(f'  우리 GT 박스 : 평균alpha {gA.mean():.3f} · 고alpha비율 {gH.mean():.3f}')
 print(f'  det−GT: 평균alpha {dA.mean()-gA.mean():+.3f} · 고alpha {dH.mean()-gH.mean():+.3f}')
 print('※ det>GT(더 조밀) → base가 조밀코어 박싱(D-Fire 컨벤션 정상)·GT는 저alpha wispy 포함 = under-box A(GT정의)+C(밀도)·B기각.')
+
+
+# ========== CELL 41: 0-b(생성셋) 특성화 — 생성 vs 컴포지팅 비교의 교란 분리 ==========
+# 원 질문: 생성모델(0-b·이미지recall 0.809/박스 0.675)보다 나은 합성법 있나. 우리 best over_ctx@256(rec@.1 0.835/rec@.5 0.464).
+# 표면 gap이 GT정의냐 품질이냐 분리: 0-b의 (a)GT bright-ratio(사람박스 tight?) (b)해상도→실효크기 (c)recall 재현.
+import os, glob, csv, subprocess, sys, numpy as np
+for pkg in ('roboflow','PIL','yaml','ultralytics'):
+    mod={'PIL':'PIL','yaml':'yaml'}.get(pkg,pkg)
+    try: __import__(mod)
+    except ImportError: subprocess.run([sys.executable,'-m','pip','install','-q',{'PIL':'Pillow','yaml':'pyyaml'}.get(pkg,pkg)],check=True)
+from PIL import Image
+from ultralytics import YOLO
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR='/content/drive/MyDrive'; W=f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt'; IMGSZ=640; CONF=0.25
+def flame_mask(rgb):
+    R,G,B=rgb[...,0].astype(float),rgb[...,1].astype(float),rgb[...,2].astype(float); lum=0.299*R+0.587*G+0.114*B
+    return ((R>B+30)&(R>90))|(lum>210)
+def iou(a,b):
+    ix0,iy0=max(a[0],b[0]),max(a[1],b[1]); ix1,iy1=min(a[2],b[2]),min(a[3],b[3]); iw,ih=max(0,ix1-ix0),max(0,iy1-iy0)
+    inter=iw*ih; ua=(a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter; return inter/ua if ua>0 else 0.0
+cand=glob.glob('/content/kitchen-fire-noise-poc-*/train')
+if cand and os.path.isdir(cand[0]+'/images'): root=os.path.dirname(cand[0])
+else:
+    from roboflow import Roboflow
+    rf=Roboflow(api_key="너의_로보플로우_키")   # ← CELL 12와 같은 키 (0-b /content에 없을 때만)
+    root=rf.workspace("kyungho-moon").project("kitchen-fire-noise-poc").version(1).download("yolov11").location
+import yaml; nm=yaml.safe_load(open(f'{root}/data.yaml')).get('names',['fire']); fire_idx=next((i for i,n in enumerate(nm) if 'fire' in str(n).lower()),0)
+splits=[s for s in ('train','valid','test') if os.path.isdir(f'{root}/{s}/images')]
+print(f'0-b root={root} · names={nm} · splits={splits}')
+m=YOLO(W); gbr=[]; bhs=[]; ress=[]; img_hit=0; nimg=0; box_hit=0; nbox=0
+for s in splits:
+    for ip in sorted(glob.glob(f'{root}/{s}/images/*.jpg')+glob.glob(f'{root}/{s}/images/*.png')):
+        lp=f'{root}/{s}/labels/'+os.path.splitext(os.path.basename(ip))[0]+'.txt'
+        if not os.path.exists(lp): continue
+        fb=[[float(x) for x in ln.split()[1:5]] for ln in open(lp) if len(ln.split())>=5 and int(float(ln.split()[0]))==fire_idx]
+        if not fb: continue
+        im=np.asarray(Image.open(ip).convert('RGB')); H,Wd=im.shape[:2]; nimg+=1; ress.append(max(H,Wd)); gts=[]
+        for cx,cy,bw,bh in fb:
+            x0,y0=max(0,int((cx-bw/2)*Wd)),max(0,int((cy-bh/2)*H)); x1,y1=min(Wd,int((cx+bw/2)*Wd)),min(H,int((cy+bh/2)*H))
+            if x1>x0 and y1>y0: gts.append((x0,y0,x1,y1)); gbr.append(float(flame_mask(im[y0:y1,x0:x1]).mean())); bhs.append(y1-y0)
+        res=m.predict(Image.fromarray(im),conf=0.001,iou=0.6,max_det=300,verbose=False)[0]
+        dp=[] if res.boxes is None else [res.boxes.xyxy.cpu().numpy()[i] for i in range(len(res.boxes.conf)) if res.boxes.conf.cpu().numpy()[i]>=CONF]
+        if dp: img_hit+=1
+        for g in gts:
+            nbox+=1
+            if any(iou(xy,g)>=0.5 for xy in dp): box_hit+=1
+gbr=np.array(gbr); bhs=np.array(bhs); ress=np.array(ress)
+def qf(a): return f'{a.mean():.3f} (med {np.percentile(a,50):.2f})'
+print(f'\n0-b(생성셋) 이미지 {nimg}·박스 {nbox} · 이미지recall {img_hit/max(1,nimg):.3f}(기록0.809)·박스recall@.5 {box_hit/max(1,nbox):.3f}(기록0.675)')
+# ===== 우리 컴포지팅 정합 측정 (VFX@256 over_ctx·18배경·같은 지표) =====
+import json, unicodedata
+def ropen(p):
+    for qz in (p, unicodedata.normalize('NFC',p), unicodedata.normalize('NFD',p)):
+        try: return Image.open(qz).convert('RGB')
+        except: pass
+    return None
+def composite(bg, flame, point, scale, anchor):
+    bgn=np.asarray(bg).astype(np.float32); H,Wd=bgn.shape[:2]; fr=Image.fromarray(flame)
+    tw=max(1,int(fr.width*scale/fr.height)); flr=np.asarray(fr.resize((tw,scale))).astype(np.float32); fh,fw=flr.shape[:2]
+    px=int(point[0]-fw//2); py=int(point[1]-int(anchor*(fh-1)))
+    x0,y0=max(0,px),max(0,py); xe,ye=min(Wd,px+fw),min(H,py+fh); fx0,fy0=x0-px,y0-py; rw,rh=xe-x0,ye-y0
+    out=bgn.copy(); A=np.zeros((H,Wd),np.float32)
+    if rw>0 and rh>0:
+        reg=flr[fy0:fy0+rh,fx0:fx0+rw]; a=reg[...,3:4]/255.
+        out[y0:y0+rh,x0:x0+rw]=out[y0:y0+rh,x0:x0+rw]*(1-a)+reg[...,:3]*a; A[y0:y0+rh,x0:x0+rw]=reg[...,3]/255.
+    ys,xs=np.where(A>0.1); gt=(int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max())) if len(xs) else None
+    return np.clip(out,0,255).astype(np.uint8), gt
+FSRC=f'{DR}/firecrop_src'; BG_ROOT=f'{DR}/realneg_frames/synth'; VFXB=f'{FSRC}/vfx_bank'
+vman={}
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')): vman.setdefault(r['scene_id'],r)
+BG_MAN=json.load(open(f'{FSRC}/manifest.json')); PLACE=json.load(open(f'{FSRC}/placement.json'))
+bgs=[(n,ropen(f'{BG_ROOT}/{BG_MAN[n]}'),PLACE[n]) for n in sorted(PLACE)]; bgs=[b for b in bgs if b[1]]
+o_gbr=[]; o_res=[]; o_ih=0; o_ni=0; o_hit=0
+for sid,r in vman.items():
+    fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); anc=float(r['anchor_frac'])
+    for n,bg,box in bgs:
+        comp,gt=composite(bg,fl,((box[0]+box[2])//2,box[3]),256,anc)
+        if gt is None: continue
+        o_ni+=1; o_res.append(max(comp.shape[:2])); o_gbr.append(float(flame_mask(comp[gt[1]:gt[3],gt[0]:gt[2]]).mean()))
+        res=m.predict(Image.fromarray(comp),conf=0.001,iou=0.6,max_det=300,verbose=False)[0]
+        dp=[] if res.boxes is None else [res.boxes.xyxy.cpu().numpy()[i] for i in range(len(res.boxes.conf)) if res.boxes.conf.cpu().numpy()[i]>=CONF]
+        if dp: o_ih+=1
+        if any(iou(xy,gt)>=0.5 for xy in dp): o_hit+=1
+o_gbr=np.array(o_gbr); o_res=np.array(o_res)
+# ===== 정합 비교 =====
+print('\n'+'='*58)
+print(f'{"지표":26}{"0-b 생성":>11}{"우리 컴포지팅":>15}')
+print(f'{"이미지 recall@0.25":26}{img_hit/max(1,nimg):>11.3f}{o_ih/max(1,o_ni):>15.3f}  <- apples')
+print(f'{"박스 recall@IoU0.5":26}{box_hit/max(1,nbox):>11.3f}{o_hit/max(1,o_ni):>15.3f}  <- GT정의 다름(0-b사람/우리alpha0.1)')
+print(f'{"GT bright-ratio(composite)":26}{gbr.mean():>11.3f}{o_gbr.mean():>15.3f}  <- 같은 basis(둘다 bg포함)')
+print(f'{"해상도 long med":26}{np.percentile(ress,50):>11.0f}{np.percentile(o_res,50):>15.0f}')
+print(f'{"실효 불꽃 med(px)":26}{np.percentile(bhs,50)*IMGSZ/np.percentile(ress,50):>11.0f}{85:>15}')
+print('='*58)
+print('※ 이미지recall 대등 → "생성>컴포지팅" 착시. 박스 gap=GT정의(bright-ratio로). 실효크기 차=검출 교란.')
+print('⚠️ unpaired=두 테스트셋(다른 배경·불꽃). 진짜 paired(같은 배경 생성 vs 컴포지팅)는 미실시.')
