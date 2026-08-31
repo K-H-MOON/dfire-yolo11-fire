@@ -19,7 +19,7 @@
 - **@64 = 상대크기(순수 소형)**: 우리 배경 long-side 1920px·ablation imgsz640 → scale 64 실효 **21px**(D-Fire 64px→98px·4.6×). 우리 전 스케일(21/43/85px 실효)이 D-Fire 학습분포(49~394px) **하단** → ablation이 실효-작은 구간서만 돎. @64 miss=**크기**(appearance 아님·상대크기 교란 확인). **scale 결론=측정구간 단서·큰 실효크기선 포화 가능.** 소형 대응=imgsz↑/SAHI.
 - **under-box = A(GT정의)+C(소스밀도)·B(base약점) 기각**: D-Fire 사람박싱=밝은불 tight(대표 random·1박스/img bright-ratio med **0.72**·편향샘플 0.355는 야간 patchy 산불). 우리 GT(alpha>0.1)=wispy. **CELL40b(bg오염0·alpha밀도): base det 박스 평균alpha 0.401·고alpha 0.397 > 우리 GT 0.256·0.250 (+0.145·n391)** → base가 조밀부(고alpha) 박싱=D-Fire 컨벤션대로 **정상**·우리 GT wispy 포함이 under-box 원인. ⑧ "2/3 under-box=base특성"·⑨ "합성법 개선불가=base영역" **철회.**
 - **"base 병목/약점" 철회**: @256 under-box=우리 GT loose+VFX wispy+실효-작은 스케일=**전부 우리쪽·가역**. base는 @256 검출함(rec@.1 0.835)·D-Fire 컨벤션대로 tight 박싱. base 대체로 정상.
-- **Phase B 처방(귀속 확정)**: (A) GT를 base 컨벤션에 맞춤(alpha>0.1보다 조임·det 평균alpha 0.40·정확 최적점=IoU-vs-GT임계 스윕 필요) · (C) 밀도 높은 실불 소스 추가(**단 (B)선 wispy도 학습·배제 아님**·실화재도 성김 있음) · 소형=imgsz↑/SAHI. **base 재학습 우선순위 아님.**
+- **Phase B 처방(귀속 확정)**: (A) GT를 base 컨벤션에 맞춤(alpha>0.1보다 조임·det 평균alpha 0.40·정확 최적점=IoU-vs-GT임계 스윕 필요) · (C) 밀도 높은 실불 소스 추가(**단 (B)선 wispy도 학습·배제 아님**·실화재도 성김 있음) · 소형=imgsz↑/SAHI. **base 재학습 우선순위 아님.** ★**단 이 처방들의 실제 화재 효과는 미측정((A) 프록시 기준)** — (A)는 실제 성능을 말하지 않음·합성 점수는 실전 대리지표 아님. **★★(B) 첫 단계 = 학습이 아니라 실 주방화재 홀드아웃 확보**(지금은 학습 필요 여부 자체가 미지 — 실 홀드아웃 없이는 판단 불가).
 - **D-Fire 구성**: 다양한 대형 실불(산불+건물+차량+도심·뉴스푸티지·**근접 주방 아님·산불 일색도 아님**).
 - **방법교훈**: numeric 3회 교란(상대크기·편향샘플[정렬-첫N]·bg오염[밝은 주방서 luma mask 오검]) → 육안+alpha+대표샘플로 매번 정정. [[no-premature-conclusions]] 강화.
 
