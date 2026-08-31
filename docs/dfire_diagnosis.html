@@ -276,6 +276,23 @@
       <p class="lead" style="font-size:1rem; margin-top:.6rem">다섯 합성 조건을 세 스케일 × 18 배경에서 장면집계. 프리즈 base가 심판. 지표는 rec@IoU0.5(conf 0.25 · GT alpha&gt;0.1).</p>
     </div>
 
+    <div class="col">
+      <h3>왜 이 조건들을 골랐나 — 문헌 → 조건</h3>
+      <ul class="clean">
+        <li><span class="lt">over vs screen</span> ← FGL-GAN <span class="num">(Sensors 2022)</span>: 불꽃은 광원이라 harmonization 부적합 · Dwibedi <span class="num">(ICCV 2017)</span>: 블렌딩 혼합 +8 AP <span class="tag">간접*</span></li>
+        <li><span class="lt">배치 (조리면 vs 랜덤)</span> ← Dvornik <span class="num">(ECCV 2018)</span> 컨텍스트 +5% ↔ Ghiasi <span class="num">(CVPR 2021)</span> 랜덤도 충분 — <strong>상반</strong>이라 검증 대상 <span class="tag">양방향</span></li>
+        <li><span class="lt">스필 (반사광)</span> ← FGL-GAN: 반사광은 배경 광량·거리에 따라 변하는 사실성 요소 <span class="tag">직접(원리)</span></li>
+        <li><span class="lt">스케일</span> ← COCO <span class="num">(2014)</span> 32²/96² 구간 · SAHI <span class="num">(2022)</span> 소형 추론 <span class="tag">개념</span></li>
+        <li><span class="lt">프리즈 검출기 = 심판</span> ← FGL-GAN(conf 품질지표) + CAS <span class="num">(NeurIPS 2019)</span> downstream 평가 — <strong>통합 직접 선례 없음 = 신규 조합</strong> <span class="tag">신규</span></li>
+      </ul>
+      <p style="font-size:.88rem; color:var(--muted); margin:0 0 .3rem">*Dwibedi는 비발광 객체 실증 — 발광 불꽃 전이는 우리 실험이 검증한다. <strong>64/128/256px 특정값 · L1→L4 순서 · 프리즈-심판 설계 = 우리 판단(직접 선례 없음)</strong>이고, 신규성의 근거이지 약점이 아니다. 전체 인용·원문 발췌 = <span class="num">SYNTH_METHOD_EVIDENCE.md</span>.</p>
+
+      <div class="key">
+        <span class="k">★ 종속변수가 다르다</span>
+        <p>선행 연구 — Dwibedi <span class="num">+8 AP</span> · Dvornik <span class="num">+5%</span> · ODGEN <span class="num">+25.3%</span> — 는 전부 <strong>합성으로 <em class="term">학습</em>시켰을 때</strong>의 효과다. 우리는 <strong>프리즈 검출기의 <em class="term">인식률</em></strong>을 쟀다. 그래서 우리의 null·작은 효과가 그 논문들과 달라도 <strong>모순이 아니다</strong> — 다른 질문에 답한 것이고, 이 구분이 곧 (A)↛(B) 비전이의 근거다.</p>
+      </div>
+    </div>
+
     <div class="tbl-wrap">
       <table>
         <caption>레버 표 — VFX · 장면집계 n=26 · rec@IoU0.5</caption>
