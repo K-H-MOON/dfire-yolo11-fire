@@ -1,6 +1,16 @@
 # HANDOFF — D-Fire YOLO11 화재 baseline
 
-## ▶▶▶▶▶▶ 재개 — 새 세션 시작점 (2026-08-31 세션 종료·사용자가 다음 세션서 이어감)
+## ▶▶▶▶▶▶▶ 재개 — 새 세션 시작점 (2026-09-01 세션 종료 · 팀 발표자료 전달 국면)
+> **한 줄 상태**: (A) 발표 문서 정합 완료 + 팀 공유 md(내부/외부) 생성 + **main 병합(로컬·미푸시)**. 현재 국면 = **팀원 발표자료 전달** — 시각자료 확정됐으나 **(A)/(B) 프레이밍 충돌 미해결**(팀원이 파인튜닝 before/after 이미지 원하나 (B) 미실시).
+> **★★ 다음 세션 시작점 = 이 미결**: 팀원(배찬우)이 **"기성 base(파인튜닝 전) 0검출 → 파인튜닝 후 N검출" before/after 이미지**를 원함(사람검출 예시 스타일). = **(B) 전이학습 결과.** **우리는 정직하게 못 만듦**: ①**파인튜닝 모델 없음**((B) = 실 급식실 화재 데이터 부재로 봉쇄) ②**프리즈 base가 합성 이미 잘 잡음**(recall 0.809~0.994)이라 "기성 0검출"이 거짓 → 만들면 데이터 조작. **▶ 다음 할 일 = (1)팀원과 (A)/(B) 정렬**(파인튜닝 안 함·못 함 · 우리 자랑 = "파인튜닝 없이도 base가 합성 인식[프록시]") **(2)정직한 대안 이미지 셀 작성**(base가 합성 composite 검출 box+conf · **빈 배경[불 없음 0] → 합성 불꽃[검출 N] 페어** · CELL 28/38 기반). **셀 미작성.**
+> **★★ push 금지 (안전)**: repo `K-H-MOON/kitchen-smoke-poc` = **PUBLIC**(2026-09-01 API 확인 `private:false`). `dfire_journey.md`(내부)에 **이메일 blessmoonkh** + 계정구조 · 문서 전반에 Drive경로·급식실 CCTV 설명 → **push하면 공개 노출.** origin/main = `ac0322e`(미푸시). 백업/협업 필요 시 **repo를 private 전환 후에만** push. [[commit-changes-continuity]]
+> **이번 세션 커밋 (전부 main 반영·로컬 cb1c3c8)**: `0da062e`(문서정합 나+다: 4.3 열화 → deck §05 견고성·Q&A Q11·여정 13번) · `4748ebb`(`docs/dfire_journey.md` 팀공유 전체 여정 md) · `5db233f`(재현 부록: Drive경로·Roboflow·계정·라이선스) · `cb1c3c8`(`docs/dfire_journey_external.md` 외부용[계정 제거]·학교CCTV 외부공유금지·HANDOFF vfx_bank 업로드완료).
+> **팀 전달물 (2종 md + 아티팩트 3)**: `docs/dfire_journey.md`(내부·이메일 포함) · `docs/dfire_journey_external.md`(외부·계정 제거·"담당자 문의") · 아티팩트 deck `c7a24a9d`·여정 `e8240245`·Q&A `82643b64`(전부 비공개·공유 켜야 열림·in-app 브라우저는 미로그인이라 못 봄).
+> **★발표 시각자료 확정(검증완료·savefig grep+이미지 육안)**: **14번** = `loc256`·`miss64`·`det_bratio` PNG 3장(Drive `synth_sweep/`·CELL 38/40b·box recall ablation·실사 composite=학교CCTV배경) + deck **§03**(over/screen)·**§04**(진단 두체제) 캡처 · **12번** = 여정 12번섹션 도해(NIST불꽃+급식실배경=합성·"배관은 작동" 캡션) · **13번** = 여정 13번섹션 도해(크기 0.994→0.694·화질 ≥0.96·"깨끗한 불꽃6종 N=160"). **★제외**: `scale_sweep`/`degrade_sweep`(CELL 24/25 **오염 초기본**·축·지표·값 다름[image recall @conf·px]≠우리 box recall@IoU0.5·0.994는 CELL27 클린뱅크로 별개) · `dryrun_montage`(CELL31·**기각된 발견2[조리면배치]** 담김·블렌드/배치 교란) · `diag_montage`·`vfx_bank_montage`(**존재 안 함**) · `dfire_boxing`/`dfire_rand`(`/content` 휘발·Drive 없음).
+> **★프레이밍 원칙 (팀원 커뮤니케이션·핵심)**: (A) = 프리즈 base가 합성 인식[프록시·필요조건] · (B) = 합성/실사로 학습해 실전 성능 오르나[봉쇄]. 팀원이 "sim-to-real 증명"이라 표현하나 **(A)로는 증명 아님**. 발표 = 반드시 **"base가 합성 인식(프록시)"**으로 · "실화재 검출/파인튜닝 성공"으로 쓰면 **과대주장**. 사람검출 before/after(기성0→파인튜닝13)는 (B) 성공담 템플릿 = 우리 단계 아님.
+> **행동원칙**: [[no-running-ahead-verify-first]]·[[no-premature-conclusions]]·[[working-style]]. **이 세션 교훈** = 팀원/외부의견 제시 파일명·수치 다수 오류(vfx_bank_montage·diag_montage 존재안함·`realneg_frames/synth`=798장(8교)≠18장[18은 firecrop_src placement.json 선택분]·scale/degrade 오염본·dryrun 기각본·0.994 provenance=CELL27)를 **savefig grep + 이미지 육안 + GitHub API로 매번 정정**. **파일 존재 ≠ 내용이 서사와 일치**. 인용은 셀 코드 확인 후. 커밋은 public repo라 push 금지.
+
+## ▶▶▶▶▶▶ 재개 — (2026-08-31 · (A) 발표 상세 · 아래는 이전 시작점)
 > **한 줄 상태**: (A) = **진단-우선 발표로 완결** · **나+다(문서 정합) 완료**(2026-08-31 후속 세션·커밋). 4.3 열화 발견을 deck(§05 신규)·Q&A(Q11)·여정(13번)에 반영 · GT스윕 잔차 0.211 여정 반영 · 여정 13번서 신규축(조명) **미제→닫힘** 명시 · 세 아티팩트 재배포(같은 URL). 프록시 유의미 작업 전부 완료 · 미제 정직 기록. 다음 = 아래 §다음 갈래 (라)/(B) 또는 발표 마무리.
 > **산출물 (세 문서 + 소스)**:
 > - **요약 발표 도표** = 아티팩트 `c7a24a9d-8013-4811-a293-860926876b14` "낮은 recall의 정체" · 소스 `docs/dfire_diagnosis.html`(커밋). **7-beat**(§05 견고성=4.3 열화 추가) 진단-우선·검증 수치만.
