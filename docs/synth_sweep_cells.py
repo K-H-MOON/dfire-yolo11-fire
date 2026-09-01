@@ -2385,3 +2385,141 @@ print('    바뀐 것은 모델이 아니라 장면이다. 파인튜닝 없이�
 print('    실전 검출 성능은 별개이며 실 급식실 화재 데이터 부재로 미검증((B))."')
 print('※ 배경=학교 CCTV → 내부 발표용. 외부 공유 시 배경 블러/교체(불꽃 NIST=퍼블릭도메인은 공유 무관).')
 print('※ 더 사실적 접지(조리면 위)를 원하면: placement.json 18배경 + CELL 38 comp_over(anchor 접지)로 교체 가능(별도 요청).')
+
+
+# ========== CELL 46 (발표 13번용·크기 사다리): 실사 배경 + 불꽃 크기↓ → 검출 박스 사라지는 지점 ==========
+# [목적] 섹션 13 "부러지는 지점"을 실사+박스로. 같은 급식실 장면·같은 불꽃을 크기만 줄이며 base 검출 → 큰 불 검출·작을수록 약해지다 놓침.
+# [설계] 열=장면(고정)·행=크기. 불꽃 base(하단)를 장면마다 한 점에 고정 → 크기가 유일 변수(한 변수). 패널=검출 conf 또는 "놓침".
+#   집계 recall은 여기서 재측정 안 함(§13 확정치 0.994/0.694와 경쟁 숫자 회피) — 이 그림은 *예시 시각화*, 집계는 §13 차트가 담당.
+# [공유] 배경=학교CCTV(내부용). 불꽃=NIST 조리유 KEEP6(퍼블릭도메인). 프리즈 프록시(실전 아님). CELL 45와 동일 검증 함수.
+import os, glob, subprocess, sys, hashlib
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib, matplotlib.pyplot as plt, matplotlib.patches as patches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W   = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+SRC = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'
+BG  = '/content/drive/MyDrive/realneg_frames/synth'
+OUT = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SEED = 1; CONF = 0.25; IOU_ON = 0.3; SCALES_L = [0.40, 0.25, 0.11]; N_SHOW = 5
+KEEP = ['1574198232-Evt3', '1574198232-EvtP', '1574199884-Evt3', '1574199884-EvtP',
+        '1508954077-EvtP', '1508958465-EvtP']
+
+def _set_ko_font():   # 한글 폰트(실패시 T()가 영문 폴백)
+    import matplotlib.font_manager as fm
+    for f in fm.findSystemFonts():
+        if any(k in f.lower() for k in ('nanum', 'malgun', 'notosanscjk', 'notosanskr', 'notosans-cjk')):
+            try:
+                fm.fontManager.addfont(f); matplotlib.rc('font', family=fm.FontProperties(fname=f).get_name())
+                matplotlib.rcParams['axes.unicode_minus'] = False; return True
+            except Exception: pass
+    try:
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'koreanize-matplotlib'], check=True)
+        import koreanize_matplotlib; return True
+    except Exception: return False
+KO = _set_ko_font()
+def T(ko, en): return ko if KO else en
+
+# --- 헬퍼 (CELL 45/28과 동일·검증됨) ---
+def extract_flame(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    m = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad)
+    x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*mm*255]).astype(np.uint8))
+
+def load_flames():
+    out, seen = [], set()
+    for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+        if not any(k in os.path.basename(p) for k in KEEP): continue
+        md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
+        if md5 in seen: continue
+        fl = extract_flame(p)
+        if fl is None or max(fl.size) < 60: continue
+        seen.add(md5); out.append((os.path.basename(p).split('__')[0], fl))
+    return out
+
+def paste(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, W_ = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W_, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, W_), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[..., 3:4]/255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[..., :3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter/ua if ua > 0 else 0.0
+
+def boxes(m, pil):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return np.zeros((0, 4)), np.zeros(0)
+    return r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()
+
+def comp_scale(bg, fl, fs, cx, cy):   # 불꽃 base(하단)를 (cx,cy)에 고정 → 크기만 변수
+    Wd, Hd = bg.size
+    th = max(1, int(Hd*fs)); tw = max(1, int(fl.width*th/fl.height)); fl_r = fl.resize((tw, th))
+    px = int(Wd*cx - tw/2); py = int(Hd*cy - th)
+    return paste(bg, fl_r, px, py)
+
+flames = load_flames(); assert flames, '클린 불꽃 0 (KEEP/SRC 확인)'
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True)); assert bgs, '배경 0 (BG 확인)'
+m = YOLO(W); rng = np.random.default_rng(SEED)
+sel = [bgs[i] for i in rng.choice(len(bgs), size=min(N_SHOW, len(bgs)), replace=False)]
+scenes = []   # 장면 고정(배경·불꽃·배치점) — 크기만 바꿈
+for bp in sel:
+    bg = Image.open(bp).convert('RGB'); nm, fl = flames[int(rng.integers(len(flames)))]
+    cx = float(rng.uniform(0.30, 0.70)); cy = float(rng.uniform(0.62, 0.82))
+    scenes.append((bg, fl, cx, cy, nm))
+print(f'뱅크 {len(flames)}종 · 장면 {len(scenes)} · 크기 {SCALES_L} · conf{CONF} · font_ko={KO}')
+
+R, Cn = len(SCALES_L), len(scenes)
+fig, ax = plt.subplots(R, Cn, figsize=(3.2*Cn, 3.0*R)); ax = np.array(ax).reshape(R, Cn)
+for ri, fs in enumerate(SCALES_L):
+    ndet = 0
+    for ci, (bg, fl, cx, cy, nm) in enumerate(scenes):
+        comp, gt = comp_scale(bg, fl, fs, cx, cy); a = ax[ri, ci]; a.imshow(comp)
+        det = None
+        if gt is not None:
+            a.add_patch(patches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.0))
+            xy, cf = boxes(m, comp)
+            cand = [(xy[i], cf[i]) for i in range(len(cf)) if cf[i] >= CONF and iou(xy[i], gt) >= IOU_ON]
+            if cand:
+                xyb, cfb = max(cand, key=lambda z: z[1]); det = float(cfb)
+                a.add_patch(patches.Rectangle((xyb[0], xyb[1]), xyb[2]-xyb[0], xyb[3]-xyb[1], fill=False, edgecolor='red', lw=2))
+        ndet += int(det is not None)
+        a.set_title(T(f'검출 {det:.2f}', f'det {det:.2f}') if det is not None else T('놓침', 'miss'),
+                    fontsize=10, color=('black' if det is not None else 'crimson'))
+        if ci == 0:
+            a.set_xticks([]); a.set_yticks([]); a.set_ylabel(T(f'크기 {fs:.2f}', f'scale {fs:.2f}'), fontsize=13)
+            for s in a.spines.values(): s.set_visible(False)
+        else:
+            a.axis('off')
+    print(f'  크기 {fs:.2f}: 이 그림 {Cn}장 중 {ndet} 검출')
+sup = T('같은 급식실 장면·같은 불꽃, 크기만 축소 — 큰 불 검출 · 작을수록 약해지다 놓침 (크기가 유일 변수)\n초록=합성불 위치 · 빨강=base 검출 · 집계 recall: 크기≥0.25 → 0.994 · 0.11 → 0.694 (§13, 이 그림은 예시)',
+        'Same scene & flame, only size shrinks — large detected, smaller weakens then missed (size = only variable)\ngreen=GT · red=base det · aggregate recall: scale>=0.25 -> 0.994 · 0.11 -> 0.694 (§13; this figure is illustrative)')
+fig.suptitle(sup, fontsize=12)
+plt.tight_layout(rect=[0, 0, 1, 0.95]); plt.savefig(f'{OUT}/scale_ladder.png', dpi=130, bbox_inches='tight'); plt.show()
+print(f'\n저장: {OUT}/scale_ladder.png  (섹션 13용·실사+박스)')
+print('※ 예시 시각화(집계 아님) — 크기 0.11 열에 검출/놓침이 섞이면 그게 recall 0.694(불확실해지는 지점)의 육안 표현.')
+print('※ 배경=학교 CCTV → 내부 발표용.')
