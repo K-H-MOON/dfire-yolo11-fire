@@ -2213,3 +2213,157 @@ print(f'{"실효 불꽃 med(px)":26}{np.percentile(bhs,50)*IMGSZ/np.percentile(r
 print('='*58)
 print('※ 이미지recall 대등 → "생성>컴포지팅" 착시. 박스 gap=GT정의(bright-ratio로). 실효크기 차=검출 교란.')
 print('⚠️ unpaired=두 테스트셋(다른 배경·불꽃). 진짜 paired(같은 배경 생성 vs 컴포지팅)는 미실시.')
+
+
+# ========== CELL 45 (발표용·정직 before/after): 같은 프리즈 base — 불 없는 장면(검출0) vs 합성 불꽃(검출N) ==========
+# [목적] 팀 발표용 정직한 대안 이미지. 팀원이 원한 "기성 base 0검출 → 파인튜닝 N검출" 형식은 정직하게 못 만듦:
+#   ① 파인튜닝 모델 없음((B) = 실 급식실 화재 데이터 부재로 봉쇄)  ② 프리즈 base가 합성을 이미 잘 잡음(recall 0.809~0.994) → "기성 0검출"이 거짓(만들면 조작).
+# [정직한 재프레이밍] 바뀐 변수 = 모델(기성 vs 파인튜닝)이 아니라 **장면(불 없음 vs 합성 조리유불)**. 모델은 두 컷 다 동일한 프리즈 base(파인튜닝 0).
+#   → 우리 (A) 프록시의 시각화: "파인튜닝 없이도 base가 합성 유류불을 인식"(필요조건). 실전 검출 성능 증명 아님((B)).
+#   → "0검출 → N검출" 시각 효과는 유지하되, 축이 '모델'이 아니라 '장면'이라 데이터 조작이 아님.
+# [설계] CELL 28 페어(맨배경 vs 불꽃추가)를 그대로(같은 검증된 함수·클린 NIST 조리유 KEEP6) + 출력만 발표용 몽타주(CELL 38 스타일 box+conf).
+# [⚠️공유] 배경 = realneg_frames/synth = 학교 CCTV(외부공유 제한·HANDOFF). **내부 발표용.** 외부 공유 시 배경 블러/교체 필요(불꽃 NIST=퍼블릭도메인은 무관).
+# [스코프] scale 0.25 = 충분크기(recall~0.994) 체제만 — 소형(조기)불 크기한계는 별건(13번/CELL27 0.994→0.694). 프리즈 프록시(실전 아님).
+import os, glob, subprocess, sys, hashlib
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+import matplotlib, matplotlib.pyplot as plt, matplotlib.patches as patches
+
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+W   = '/content/drive/MyDrive/dfire_runs/fire_ptrain_b79/weights/best.pt'
+SRC = '/content/drive/MyDrive/firecrop_src/nist_stovetop_cornoil'   # 조리유 불꽃(퍼블릭도메인·공유가능)
+BG  = '/content/drive/MyDrive/realneg_frames/synth'                 # 학교 CCTV(외부공유 제한)
+OUT = '/content/drive/MyDrive/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+SEED = 0; FS = 0.25; CONF = 0.25; IOU_ON = 0.3; N_SCAN = 200; PAIRS = 6
+KEEP = ['1574198232-Evt3', '1574198232-EvtP', '1574199884-Evt3', '1574199884-EvtP',
+        '1508954077-EvtP', '1508958465-EvtP']
+
+def _set_ko_font():   # 한글 폰트(실패시 T()가 영문 라벨로 폴백 — 렌더 tofu 방지)
+    import matplotlib.font_manager as fm
+    for f in fm.findSystemFonts():
+        if any(k in f.lower() for k in ('nanum', 'malgun', 'notosanscjk', 'notosanskr', 'notosans-cjk')):
+            try:
+                fm.fontManager.addfont(f); matplotlib.rc('font', family=fm.FontProperties(fname=f).get_name())
+                matplotlib.rcParams['axes.unicode_minus'] = False; return True
+            except Exception: pass
+    try:
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'koreanize-matplotlib'], check=True)
+        import koreanize_matplotlib; return True
+    except Exception: return False
+KO = _set_ko_font()
+def T(ko, en): return ko if KO else en
+
+# --- 헬퍼 (CELL 28과 동일·검증됨) ---
+def extract_flame(path):
+    im = np.asarray(Image.open(path).convert('RGB')).astype(np.float32)
+    R, G, B = im[..., 0], im[..., 1], im[..., 2]; lum = 0.299*R + 0.587*G + 0.114*B
+    mask = ((R > B + 30) & (R > 90)) | (lum > 210)
+    if mask.sum() < 50: return None
+    lbl, _ = ndimage.label(mask); c = np.bincount(lbl.ravel()); c[0] = 0
+    m = ndimage.binary_dilation(lbl == c.argmax(), iterations=3)
+    ys, xs = np.where(m); pad = 10
+    x0 = max(0, xs.min()-pad); y0 = max(0, ys.min()-pad)
+    x1 = min(im.shape[1]-1, xs.max()+pad); y1 = min(im.shape[0]-1, ys.max()+pad)
+    crop = im[y0:y1, x0:x1]; mm = m[y0:y1, x0:x1].astype(np.float32); l = lum[y0:y1, x0:x1]
+    return Image.fromarray(np.dstack([crop, np.clip(l/160., 0, 1)*mm*255]).astype(np.uint8))
+
+def load_flames():
+    out, seen = [], set()
+    for p in sorted(glob.glob(f'{SRC}/*FIRE*.jpg')):
+        if not any(k in os.path.basename(p) for k in KEEP): continue
+        md5 = hashlib.md5(open(p, 'rb').read()).hexdigest()
+        if md5 in seen: continue
+        fl = extract_flame(p)
+        if fl is None or max(fl.size) < 60: continue
+        seen.add(md5); out.append((os.path.basename(p).split('__')[0], fl))
+    return out
+
+def paste(bg_img, fl_rgba, px, py):
+    bg = np.asarray(bg_img.convert('RGB')).astype(np.float32); H, W_ = bg.shape[:2]
+    fl = np.asarray(fl_rgba).astype(np.float32); fh, fw = fl.shape[:2]
+    x0c, y0c = max(0, px), max(0, py); x1 = min(W_, px+fw); y1 = min(H, py+fh)
+    fx0, fy0 = x0c-px, y0c-py; rw, rh = x1-x0c, y1-y0c
+    out = bg.copy(); A = np.zeros((H, W_), np.float32)
+    if rw > 0 and rh > 0:
+        reg = fl[fy0:fy0+rh, fx0:fx0+rw]; a = reg[..., 3:4]/255.
+        out[y0c:y0c+rh, x0c:x0c+rw] = out[y0c:y0c+rh, x0c:x0c+rw]*(1-a) + reg[..., :3]*a
+        A[y0c:y0c+rh, x0c:x0c+rw] = reg[..., 3]/255.
+    ys, xs = np.where(A > 0.1)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), box
+
+def iou(a, b):
+    ix0, iy0 = max(a[0], b[0]), max(a[1], b[1]); ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0, ix1-ix0), max(0, iy1-iy0); inter = iw*ih
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter/ua if ua > 0 else 0.0
+
+def boxes(m, pil):
+    r = m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    if r.boxes is None or len(r.boxes) == 0: return np.zeros((0, 4)), np.zeros(0)
+    return r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()
+
+flames = load_flames(); assert flames, '클린 불꽃 0 (KEEP/SRC 확인)'
+bgs = sorted(glob.glob(f'{BG}/**/*.jpg', recursive=True)); assert bgs, '배경 0 (BG 확인)'
+m = YOLO(W); rng = np.random.default_rng(SEED)
+sel = [bgs[i] for i in rng.choice(len(bgs), size=min(N_SCAN, len(bgs)), replace=False)]
+print(f'뱅크 {len(flames)}종 · 스캔 배경 {len(sel)}장 · conf{CONF} · scale{FS} · font_ko={KO}')
+
+# 스캔: 발표 페어 수집(맨배경 클린 & 합성 검출) + 정직 집계(전수 — FP/recall 숨기지 않음)
+pairs = []; n_bare_clean = 0; n_bare_fp = 0; hits = 0; confs = []
+for bp in sel:
+    bg = Image.open(bp).convert('RGB'); Wd, Hd = bg.size
+    xyb, cfb = boxes(m, bg)                                     # (1) 맨 배경 = "불 없음"(before)
+    bare_clean = not bool((cfb >= CONF).any())
+    n_bare_clean += int(bare_clean); n_bare_fp += int(not bare_clean)
+    nm, fl = flames[int(rng.integers(len(flames)))]
+    th = max(1, int(Hd*FS)); tw = max(1, int(fl.width*th/fl.height)); fl_r = fl.resize((tw, th))
+    px = int(Wd*rng.uniform(0.15, 0.85) - tw/2); py = int(Hd*rng.uniform(0.35, 0.75) - th/2)
+    comp, gt = paste(bg, fl_r, px, py)                         # (2) 합성 불꽃 = "불 있음"(after)
+    xyc, cfc = boxes(m, comp)
+    match = [(xyc[i], cfc[i]) for i in range(len(cfc)) if cfc[i] >= CONF and gt and iou(xyc[i], gt) >= IOU_ON]
+    on = len(match) > 0; hits += int(on)
+    if on: confs.append(max(cf for _, cf in match))
+    if bare_clean and on and len(pairs) < PAIRS:
+        pairs.append((bp, bg, comp, gt, match, nm))
+
+n = len(sel)
+print(f'\n=== 정직 집계 (전수 n={n}) ===')
+print(f'  맨배경 base 침묵(검출0)  : {n_bare_clean}/{n} = {n_bare_clean/n:.1%}   ← "before" = 불 없으면 base 조용(정상)')
+print(f'  맨배경 헛불(FP≥{CONF})    : {n_bare_fp}/{n} = {n_bare_fp/n:.1%}   ← FP는 배경 색혼동(별건·CELL28/§견고성)')
+print(f'  합성 불꽃 검출(recall)   : {hits}/{n} = {hits/n:.1%}   ← "after" = 파인튜닝 없이도 base가 인식')
+if confs: print(f'  검출 conf 평균(hit)      : {np.mean(confs):.2f} (n{len(confs)})')
+print(f'  → 발표 페어 {len(pairs)}쌍 수집(맨배경 클린 & 합성 검출)')
+
+# 발표용 몽타주: [불 없음 | 합성 불꽃 검출] × PAIRS  (초록=합성불 위치 GT · 빨강=base 검출)
+K = len(pairs)
+if K:
+    fig, ax = plt.subplots(K, 2, figsize=(11, K*3.3)); ax = np.array(ax).reshape(K, 2)
+    for i, (bp, bg, comp, gt, match, nm) in enumerate(pairs):
+        ax[i, 0].imshow(bg); ax[i, 0].axis('off')
+        ax[i, 0].set_title(T('불 없음 · base 검출 0', 'no fire · base: 0 det'), fontsize=11)
+        ax[i, 1].imshow(comp); ax[i, 1].axis('off')
+        ax[i, 1].add_patch(patches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.5))
+        best = max(cf for _, cf in match)
+        for xy, cf in match:
+            ax[i, 1].add_patch(patches.Rectangle((xy[0], xy[1]), xy[2]-xy[0], xy[3]-xy[1], fill=False, edgecolor='red', lw=2))
+        ax[i, 1].set_title(T(f'합성 조리유불 · base 검출 conf {best:.2f}', f'synthetic oil fire · base det conf {best:.2f}'), fontsize=11)
+    sup = T('같은 프리즈 base(파인튜닝 0) — 장면만 바뀜: 불 없음(검출0) → 합성 조리유불(검출N)\n(A) 프록시: 파인튜닝 없이도 base가 합성 불꽃 인식 · 초록=합성불 위치 빨강=base 검출 · 실전 성능 아님((B) 봉쇄)',
+            'Same frozen base (0 fine-tuning) - only the SCENE changes: no fire (0 det) -> synthetic oil fire (N det)\n(A) proxy: base recognizes synthetic flame without fine-tuning · green=GT red=base det · not real-world perf ((B) blocked)')
+    fig.suptitle(sup, fontsize=12)
+    plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.savefig(f'{OUT}/honest_beforeafter.png', dpi=110, bbox_inches='tight'); plt.show()
+    print('  →', f'{OUT}/honest_beforeafter.png')
+else:
+    print('  (페어 0 — N_SCAN↑ 또는 CONF/FS 조정)')
+
+print('\n※ 정직 캡션(발표 이미지 밑에 붙일 문구):')
+print('   "동일한 프리즈 검출기(파인튜닝 0). 왼쪽=불 없음→검출 0, 오른쪽=합성 조리유불→검출.')
+print('    바뀐 것은 모델이 아니라 장면이다. 파인튜닝 없이도 base가 합성 불꽃을 인식함을 보인다(필요조건·프록시).')
+print('    실전 검출 성능은 별개이며 실 급식실 화재 데이터 부재로 미검증((B))."')
+print('※ 배경=학교 CCTV → 내부 발표용. 외부 공유 시 배경 블러/교체(불꽃 NIST=퍼블릭도메인은 공유 무관).')
+print('※ 더 사실적 접지(조리면 위)를 원하면: placement.json 18배경 + CELL 38 comp_over(anchor 접지)로 교체 가능(별도 요청).')
