@@ -2523,3 +2523,116 @@ plt.tight_layout(rect=[0, 0, 1, 0.95]); plt.savefig(f'{OUT}/scale_ladder.png', d
 print(f'\n저장: {OUT}/scale_ladder.png  (섹션 13용·실사+박스)')
 print('※ 예시 시각화(집계 아님) — 크기 0.11 열에 검출/놓침이 섞이면 그게 recall 0.694(불확실해지는 지점)의 육안 표현.')
 print('※ 배경=학교 CCTV → 내부 발표용.')
+
+
+# ========== CELL 47 (발표 14번용·깔끔 진단 2패널): 두 병목 한글·풀맥락 ==========
+# [목적] 섹션 14 "낮은 recall = 두 병목"을 발표용으로. loc256/miss64(영어·줌인·jargon) 대체.
+#   ★★프레이밍 이미지에 박아넣음 — 빨강<초록을 "base가 박스 못 그림"으로 오해 금지:
+#     base는 밝은 코어에 tight 박싱(D-Fire 관행·bright-ratio 0.72·정상)이고, 우리 GT가 alpha>0.1이라 wispy까지 포함해 헐거운 것(가역).
+# [설계] 2패널: (A)작은 불→놓침(검출병목·scale64) (B)큰 불→검출하나 코어만(위치병목·scale256).
+#   CELL 38과 동일 파이프라인(VFX+placement 접지). 풀맥락 크롭·한글 라벨·프레이밍 캡션 내장.
+import os, csv, subprocess, sys, json, numpy as np
+try: import ultralytics
+except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'ultralytics'], check=True)
+from ultralytics import YOLO
+from PIL import Image
+import matplotlib, matplotlib.pyplot as plt, matplotlib.patches as patches
+if not os.path.exists('/content/drive/MyDrive'):
+    from google.colab import drive; drive.mount('/content/drive')
+DR='/content/drive/MyDrive'; FSRC=f'{DR}/firecrop_src'; BG_ROOT=f'{DR}/realneg_frames/synth'; VFXB=f'{FSRC}/vfx_bank'
+OUT=f'{DR}/synth_sweep'; os.makedirs(OUT, exist_ok=True)
+CONF=0.25; IOU_ON=0.3
+
+def _set_ko_font():
+    import matplotlib.font_manager as fm
+    for f in fm.findSystemFonts():
+        if any(k in f.lower() for k in ('nanum', 'malgun', 'notosanscjk', 'notosanskr', 'notosans-cjk')):
+            try:
+                fm.fontManager.addfont(f); matplotlib.rc('font', family=fm.FontProperties(fname=f).get_name())
+                matplotlib.rcParams['axes.unicode_minus']=False; return True
+            except Exception: pass
+    try:
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'koreanize-matplotlib'], check=True)
+        import koreanize_matplotlib; return True
+    except Exception: return False
+KO=_set_ko_font()
+def T(ko, en): return ko if KO else en
+
+m=YOLO(f'{DR}/dfire_runs/fire_ptrain_b79/weights/best.pt')
+seen=set(); vscenes=[]
+for r in csv.DictReader(open(f'{VFXB}/manifest.csv')):
+    if r['scene_id'] not in seen: seen.add(r['scene_id']); vscenes.append(r)
+BG_MAN=json.load(open(f'{FSRC}/manifest.json')); PLACE=json.load(open(f'{FSRC}/placement.json'))
+def ropen(p):
+    try: return Image.open(p).convert('RGB')
+    except: return None
+bgs=[(n, ropen(f'{BG_ROOT}/{BG_MAN[n]}'), PLACE[n]) for n in sorted(PLACE)]; bgs=[b for b in bgs if b[1]]
+
+def iou(a, b):
+    ix0,iy0=max(a[0],b[0]),max(a[1],b[1]); ix1,iy1=min(a[2],b[2]),min(a[3],b[3]); iw,ih=max(0,ix1-ix0),max(0,iy1-iy0)
+    inter=iw*ih; ua=(a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter; return inter/ua if ua>0 else 0.0
+def comp_over(bg, flame, scale, anchor, box):
+    bgn=np.asarray(bg).astype(np.float32); H,Wd=bgn.shape[:2]; fr=Image.fromarray(flame)
+    tw=max(1,int(fr.width*scale/fr.height)); flr=np.asarray(fr.resize((tw,scale))).astype(np.float32); fh,fw=flr.shape[:2]
+    px=int((box[0]+box[2])//2-fw//2); py=int(box[3]-int(anchor*(fh-1)))
+    x0,y0=max(0,px),max(0,py); xe,ye=min(Wd,px+fw),min(H,py+fh); fx0,fy0=x0-px,y0-py; rw,rh=xe-x0,ye-y0
+    out=bgn.copy(); A=np.zeros((H,Wd),np.float32)
+    if rw>0 and rh>0:
+        reg=flr[fy0:fy0+rh,fx0:fx0+rw]; a=reg[...,3:4]/255.
+        out[y0:y0+rh,x0:x0+rw]=out[y0:y0+rh,x0:x0+rw]*(1-a)+reg[...,:3]*a; A[y0:y0+rh,x0:x0+rw]=reg[...,3]/255.
+    ys,xs=np.where(A>0.1); gt=(int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max())) if len(xs) else None
+    return Image.fromarray(np.clip(out,0,255).astype(np.uint8)), gt
+def dets(pil):
+    r=m.predict(pil, conf=0.001, iou=0.6, max_det=300, verbose=False)[0]
+    return [] if r.boxes is None else [(xy.tolist(), float(cf)) for xy,cf in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy())]
+def crop_ctx(pil, gt, margin=2.5, minsz=520):   # 불꽃 주변 맥락 유지 크롭(줌인 과함 방지)
+    W,H=pil.size; cx,cy=(gt[0]+gt[2])/2,(gt[1]+gt[3])/2; bw,bh=gt[2]-gt[0],gt[3]-gt[1]
+    hw=max(bw*margin,minsz)/2; hh=max(bh*margin,minsz)/2
+    x0,y0=int(max(0,cx-hw)),int(max(0,cy-hh)); x1,y1=int(min(W,cx+hw)),int(min(H,cy+hh))
+    return pil.crop((x0,y0,x1,y1)),(x0,y0)
+
+# (A) 작은 불 → base 놓침 (검출병목·scale64): GT 있으나 conf>=0.25 매칭 det 없음
+missA=None
+for r in vscenes:
+    fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); anc=float(r['anchor_frac'])
+    for n,bg,box in bgs:
+        comp,gt=comp_over(bg,fl,64,anc,box)
+        if gt is None: continue
+        ds=[(xy,cf) for xy,cf in dets(comp) if cf>=CONF]
+        if not any(iou(xy,gt)>=IOU_ON for xy,cf in ds):
+            missA=(r['scene_id'],comp,gt); break
+    if missA: break
+# (B) 큰 불 → base 검출하나 코어만 (위치병목·scale256): best det IoU 0.1~0.5
+coreB=None
+for r in vscenes:
+    fl=np.asarray(Image.open(f'{VFXB}/{r["matte"]}').convert('RGBA')); anc=float(r['anchor_frac'])
+    for n,bg,box in bgs:
+        comp,gt=comp_over(bg,fl,256,anc,box)
+        if gt is None: continue
+        ds=[(xy,cf) for xy,cf in dets(comp) if cf>=CONF]
+        if not ds: continue
+        xy,cf=max(ds,key=lambda z:z[1]); ii=iou(xy,gt)
+        da=(xy[2]-xy[0])*(xy[3]-xy[1]); ga=(gt[2]-gt[0])*(gt[3]-gt[1])
+        if 0.1<=ii<0.5:
+            coreB=(r['scene_id'],comp,gt,xy,cf,ii,(da/ga if ga>0 else 0)); break
+    if coreB: break
+assert missA and coreB, f'예시 못 찾음 missA={missA is not None} coreB={coreB is not None} — 스케일/조건 조정'
+
+fig,ax=plt.subplots(1,2,figsize=(15,6.2))
+sid,comp,gt=missA; sub,(ox,oy)=crop_ctx(comp,gt)   # Panel A: 놓침(초록 GT만·빨강 없음)
+ax[0].imshow(sub); ax[0].axis('off')
+ax[0].add_patch(patches.Rectangle((gt[0]-ox,gt[1]-oy),gt[2]-gt[0],gt[3]-gt[1],fill=False,edgecolor='lime',lw=3))
+ax[0].set_title(T('작은 불 → base 놓침 (검출 병목)', 'small fire -> missed (detection bottleneck)'), fontsize=14)
+sid,comp,gt,xy,cf,ii,ratio=coreB; sub,(ox,oy)=crop_ctx(comp,gt)   # Panel B: 검출하나 코어만(초록 GT+빨강 det)
+ax[1].imshow(sub); ax[1].axis('off')
+ax[1].add_patch(patches.Rectangle((gt[0]-ox,gt[1]-oy),gt[2]-gt[0],gt[3]-gt[1],fill=False,edgecolor='lime',lw=3))
+ax[1].add_patch(patches.Rectangle((xy[0]-ox,xy[1]-oy),xy[2]-xy[0],xy[3]-xy[1],fill=False,edgecolor='red',lw=2.5))
+ax[1].set_title(T('큰 불 → base 검출하나 박스는 코어만 (위치 병목)', 'large fire -> detected, box=core only (localization bottleneck)'), fontsize=14)
+fig.suptitle(T('낮은 recall = 서로 다른 두 병목 (섹션 14 진단)', 'Low recall = two different bottlenecks (§14)'), fontsize=15, y=0.99)
+cap=T('초록=우리 GT(wispy까지 포함·헐거움) · 빨강=base 검출(밝은 코어에 tight·D-Fire 관행)\n왼쪽=너무 작아 놓침(실효 21px) · 오른쪽=검출은 하나 코어만 → 낮은 IoU는 GT 정의 차이지 base 결함 아님 · 둘 다 우리 측정 설정 문제(가역)',
+       'green=our GT(loose, incl. wispy) · red=base det(tight on bright core, D-Fire convention)\nleft=too small->missed · right=detected but core-only -> low IoU is a GT-definition mismatch, not a base fault (both reversible)')
+fig.text(0.5, 0.015, cap, ha='center', fontsize=10, style='italic')
+plt.tight_layout(rect=[0,0.09,1,0.94]); plt.savefig(f'{OUT}/section14_diagnosis.png', dpi=130, bbox_inches='tight'); plt.show()
+print('저장:', f'{OUT}/section14_diagnosis.png')
+print(f'  (A) 놓침 장면 {missA[0]} · (B) 코어만 장면 {coreB[0]} IoU{coreB[5]:.2f} det/GT{coreB[6]:.2f}')
+print('※ 프레이밍 캡션 내장 — 빨강<초록을 "base 결함"으로 오해 금지(base 정상·우리 GT 헐거움·가역).')
