@@ -2340,24 +2340,42 @@ print(f'  합성 불꽃 검출(recall)   : {hits}/{n} = {hits/n:.1%}   ← "afte
 if confs: print(f'  검출 conf 평균(hit)      : {np.mean(confs):.2f} (n{len(confs)})')
 print(f'  → 발표 페어 {len(pairs)}쌍 수집(맨배경 클린 & 합성 검출)')
 
-# 발표용 몽타주: [불 없음 | 합성 불꽃 검출] × PAIRS  (초록=합성불 위치 GT · 빨강=base 검출)
-K = len(pairs)
+# 발표용 렌더: (1) 개별 페어 PNG(슬라이드 삽입용·고DPI·정직 캡션 내장) + (2) 오버뷰 몽타주  (초록=합성불 GT · 빨강=base 검출)
+def _draw_after(a, comp, gt, match):
+    a.imshow(comp); a.axis('off')
+    a.add_patch(patches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.5))
+    for xy, cf in match:
+        a.add_patch(patches.Rectangle((xy[0], xy[1]), xy[2]-xy[0], xy[3]-xy[1], fill=False, edgecolor='red', lw=2))
+    return max(cf for _, cf in match)
+
+K = len(pairs); saved = []
+CAP = T('동일 프리즈 검출기(파인튜닝 0) · 바뀐 것은 장면(불 없음→합성 조리유불)이지 모델이 아님',
+        'Same frozen detector (0 fine-tuning) · the SCENE changed (no fire -> synthetic oil fire), not the model')
+# (1) 개별 페어 — 슬라이드에 하나씩 얹기 좋음(정직 캡션 내장 → 이미지가 맥락과 분리돼도 오독 방지)
+for i, (bp, bg, comp, gt, match, nm) in enumerate(pairs, 1):
+    fig, ax = plt.subplots(1, 2, figsize=(11, 4.3))
+    ax[0].imshow(bg); ax[0].axis('off'); ax[0].set_title(T('불 없음 · base 검출 0', 'no fire · base 0 det'), fontsize=13)
+    best = _draw_after(ax[1], comp, gt, match)
+    ax[1].set_title(T(f'합성 조리유불 · base 검출 conf {best:.2f}', f'synthetic oil fire · base det conf {best:.2f}'), fontsize=13)
+    fig.text(0.5, 0.03, CAP, ha='center', fontsize=9, style='italic')
+    p = f'{OUT}/honest_pair_{i}.png'; plt.tight_layout(rect=[0, 0.06, 1, 1])
+    plt.savefig(p, dpi=150, bbox_inches='tight'); plt.close(fig); saved.append(p)
+# (2) 오버뷰 몽타주 — 어느 페어가 좋은지 [번호]로 한눈에 → 대응 honest_pair_[번호].png 를 슬라이드에
 if K:
     fig, ax = plt.subplots(K, 2, figsize=(11, K*3.3)); ax = np.array(ax).reshape(K, 2)
     for i, (bp, bg, comp, gt, match, nm) in enumerate(pairs):
         ax[i, 0].imshow(bg); ax[i, 0].axis('off')
-        ax[i, 0].set_title(T('불 없음 · base 검출 0', 'no fire · base: 0 det'), fontsize=11)
-        ax[i, 1].imshow(comp); ax[i, 1].axis('off')
-        ax[i, 1].add_patch(patches.Rectangle((gt[0], gt[1]), gt[2]-gt[0], gt[3]-gt[1], fill=False, edgecolor='lime', lw=1.5))
-        best = max(cf for _, cf in match)
-        for xy, cf in match:
-            ax[i, 1].add_patch(patches.Rectangle((xy[0], xy[1]), xy[2]-xy[0], xy[3]-xy[1], fill=False, edgecolor='red', lw=2))
-        ax[i, 1].set_title(T(f'합성 조리유불 · base 검출 conf {best:.2f}', f'synthetic oil fire · base det conf {best:.2f}'), fontsize=11)
+        ax[i, 0].set_title(T(f'[{i+1}] 불 없음 · 검출 0', f'[{i+1}] no fire · 0 det'), fontsize=11)
+        best = _draw_after(ax[i, 1], comp, gt, match)
+        ax[i, 1].set_title(T(f'[{i+1}] 합성 조리유불 · 검출 conf {best:.2f}', f'[{i+1}] synthetic oil fire · det conf {best:.2f}'), fontsize=11)
     sup = T('같은 프리즈 base(파인튜닝 0) — 장면만 바뀜: 불 없음(검출0) → 합성 조리유불(검출N)\n(A) 프록시: 파인튜닝 없이도 base가 합성 불꽃 인식 · 초록=합성불 위치 빨강=base 검출 · 실전 성능 아님((B) 봉쇄)',
             'Same frozen base (0 fine-tuning) - only the SCENE changes: no fire (0 det) -> synthetic oil fire (N det)\n(A) proxy: base recognizes synthetic flame without fine-tuning · green=GT red=base det · not real-world perf ((B) blocked)')
     fig.suptitle(sup, fontsize=12)
-    plt.tight_layout(rect=[0, 0, 1, 0.97]); plt.savefig(f'{OUT}/honest_beforeafter.png', dpi=110, bbox_inches='tight'); plt.show()
-    print('  →', f'{OUT}/honest_beforeafter.png')
+    plt.tight_layout(rect=[0, 0, 1, 0.96]); plt.savefig(f'{OUT}/honest_beforeafter.png', dpi=130, bbox_inches='tight'); plt.show()
+    print('\n저장:')
+    print(f'  오버뷰 몽타주 : {OUT}/honest_beforeafter.png  (어느 페어 좋은지 [번호]로 고르기)')
+    for p in saved: print(f'  슬라이드용    : {p}')
+    print('  → 발표엔 개별 honest_pair_[번호].png 를 슬라이드에 삽입(정직 캡션 내장). 몽타주는 오버뷰용.')
 else:
     print('  (페어 0 — N_SCAN↑ 또는 CONF/FS 조정)')
 
